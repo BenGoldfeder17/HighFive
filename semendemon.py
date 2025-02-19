@@ -1,7 +1,7 @@
 # Creating a program that uses the Raspberry Pi AI Camera with the Pi 4 to detect which trash goes in the recycling and which goes in the trash
 
 # Importing the necessary libraries
-#fuck me in the asshole
+import numpy as np
 import cv2
 import numpy as np
 import os
