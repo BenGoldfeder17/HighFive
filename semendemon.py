@@ -1,6 +1,3 @@
-# Creating a program that uses the Raspberry Pi AI Camera with the Pi 4 to detect which trash goes in the recycling and which goes in the trash
-
-# Importing the necessary libraries
 import time
 import cv2
 import numpy as np
@@ -143,5 +140,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-# End of program
