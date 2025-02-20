@@ -5,6 +5,7 @@ import RPi.GPIO as GPIO
 from picamera import PiCamera
 from tflite_runtime.interpreter import Interpreter
 
+# jon has a big forehead
 # --- Servo Motor Setup ---
 # Define the GPIO pin connected to the servo
 SERVO_PIN = 18
