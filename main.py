@@ -2,10 +2,9 @@ import time
 import cv2
 import numpy as np
 import RPi.GPIO as GPIO
+import tensorflow as tf
 from picamera import PiCamera
-from tflite_runtime.interpreter import Interpreter
 
-# jon has a big forehead
 # --- Servo Motor Setup ---
 # Define the GPIO pin connected to the servo
 SERVO_PIN = 18
@@ -34,16 +33,12 @@ def set_servo_angle(angle):
 # Adjust or expand this list as needed.
 recycling_items = {'bottle', 'can', 'cup', 'box'}
 
-# --- Load TFLite Model and Labels ---
-MODEL_PATH = 'detect.tflite'    # Path to your TFLite detection model
+# --- Load TensorFlow Model and Labels ---
+MODEL_PATH = 'detect.pb'    # Path to your TensorFlow detection model
 LABELS_PATH = 'labelmap.txt'      # Path to your label map file
 
-# Initialize the TFLite interpreter.
-interpreter = Interpreter(model_path=MODEL_PATH)
-interpreter.allocate_tensors()
-
-input_details = interpreter.get_input_details()
-output_details = interpreter.get_output_details()
+# Load the TensorFlow model
+model = tf.saved_model.load(MODEL_PATH)
 
 def load_labels(path):
     """
@@ -73,9 +68,8 @@ def process_image(image):
     """
     Resizes and normalizes the captured image to match the model's input requirements.
     """
-    input_shape = input_details[0]['shape']  # e.g., [1, height, width, 3]
-    height, width = input_shape[1], input_shape[2]
-    img_resized = cv2.resize(image, (width, height))
+    input_shape = [1, 640, 480, 3]  # Example input shape
+    img_resized = cv2.resize(image, (input_shape[2], input_shape[1]))
     # Expand dimensions and normalize the pixel values (example normalization)
     input_data = np.expand_dims(img_resized, axis=0).astype(np.float32)
     input_data = (input_data - 127.5) / 127.5
@@ -87,15 +81,14 @@ def detect_objects(image):
     confidence scores, and number of detections.
     """
     input_data = process_image(image)
-    interpreter.set_tensor(input_details[0]['index'], input_data)
-    interpreter.invoke()
+    detections = model(input_data)
     
-    # Retrieve detection results from the interpreter
-    boxes = interpreter.get_tensor(output_details[0]['index'])[0]     # Bounding boxes
-    classes = interpreter.get_tensor(output_details[1]['index'])[0]   # Class indices
-    scores = interpreter.get_tensor(output_details[2]['index'])[0]    # Confidence scores
-    num = interpreter.get_tensor(output_details[3]['index'])[0]       # Number of detections
-    return boxes, classes, scores, int(num)
+    # Retrieve detection results from the model
+    boxes = detections['detection_boxes'][0].numpy()     # Bounding boxes
+    classes = detections['detection_classes'][0].numpy()   # Class indices
+    scores = detections['detection_scores'][0].numpy()    # Confidence scores
+    num = len(boxes)       # Number of detections
+    return boxes, classes, scores, num
 
 def determine_category(classes, scores, threshold=0.5):
     """
