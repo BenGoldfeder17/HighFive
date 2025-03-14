@@ -2,9 +2,9 @@ import RPi.GPIO as GPIO
 import time
 
 # Define GPIO pins
-IN1 = 24
-IN2 = 23
-ENA = 25
+IN1 = 23
+IN2 = 24
+ENA = 5
 
 # Setup GPIO mode
 GPIO.setmode(GPIO.BCM)
