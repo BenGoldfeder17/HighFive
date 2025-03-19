@@ -43,6 +43,22 @@ try:
             rotate_right()
         elif command == "stop":
             stop_motor()
+        elif command == "trash":
+            rotate_right()
+            time.sleep(1.6)
+            stop_motor()
+            time.sleep(.3)
+            rotate_left()
+            time.sleep(1.6)
+            stop_motor()
+        elif command == "recycle":
+            rotate_left()
+            time.sleep(1.6)
+            stop_motor()
+            time.sleep(.3)
+            rotate_right()
+            time.sleep(1.6)
+            stop_motor()
         else:
             print("Invalid command. Please enter 'left', 'right', or 'stop'.")
 except KeyboardInterrupt:
