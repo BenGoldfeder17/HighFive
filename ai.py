@@ -9,3 +9,4 @@ data_dir  = '/kaggle/input/garbage-classification/Garbage classification/Garbage
 
 classes = os.listdir(data_dir)
 print(classes)
+pip install imx500-converter[tf]
