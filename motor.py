@@ -45,19 +45,19 @@ try:
             stop_motor()
         elif command == "trash":
             rotate_right()
-            time.sleep(10)
+            time.sleep(3.5)
             stop_motor()
             time.sleep(1)
             rotate_left()
-            time.sleep(10)
+            time.sleep(3.5)
             stop_motor()
         elif command == "recycle":
             rotate_left()
-            time.sleep(10)
+            time.sleep(3.5)
             stop_motor()
             time.sleep(1)
             rotate_right()
-            time.sleep(10)
+            time.sleep(3.5)
             stop_motor()
         else:
             print("Invalid command. Please enter 'left', 'right', 'trash', 'recycle' or 'stop'.")
