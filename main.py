@@ -2,6 +2,11 @@ import os
 import subprocess
 import sys
 
+# Ensure the script is running with root permissions
+if os.geteuid() != 0:
+    print("Error: This script must be run as root. Try using 'sudo'.")
+    sys.exit(1)
+
 # Ensure required packages are installed
 required_packages = ["RPi.GPIO", "tensorflow", "opencv-python", "pygame"]
 for package in required_packages:
@@ -18,13 +23,17 @@ import pygame
 import threading
 
 # GPIO setup
-IN1, IN2, ENA = 23, 24, 5
-GPIO.setmode(GPIO.BCM)
-GPIO.setup(IN1, GPIO.OUT)
-GPIO.setup(IN2, GPIO.OUT)
-GPIO.setup(ENA, GPIO.OUT)
-pwm = GPIO.PWM(ENA, 1000)
-pwm.start(0)
+try:
+    IN1, IN2, ENA = 23, 24, 5
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setup(IN1, GPIO.OUT)
+    GPIO.setup(IN2, GPIO.OUT)
+    GPIO.setup(ENA, GPIO.OUT)
+    pwm = GPIO.PWM(ENA, 1000)
+    pwm.start(0)
+except Exception as e:
+    print(f"GPIO setup failed: {e}")
+    sys.exit(1)
 
 def rotate_left(speed=100):
     GPIO.output(IN1, GPIO.HIGH)
