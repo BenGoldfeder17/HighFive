@@ -36,9 +36,9 @@ model.eval()
 model.to(device)
 
 # Image preprocessing
-img_height, img_width = 224, 224  # Update to match ResNet18's expected input size
+img_height, img_width = 224, 224  # Ensure input size matches ResNet18's expected input
 preprocess = transforms.Compose([
-    transforms.ToPILImage(),
+    transforms.ToPILImage(mode="RGB"),  # Ensure the image is in RGB format
     transforms.Resize((img_height, img_width)),  # Resize to 224x224
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),  # Normalize as required by ResNet
@@ -120,9 +120,13 @@ def classify_and_act():
     global current_item, trash_count, recycle_count
     while running:
         frame = picam2.capture_array()  # Capture a frame as a NumPy array
+        frame = np.ascontiguousarray(frame)  # Ensure the frame is contiguous in memory
         input_frame = preprocess_frame(frame)
         with torch.no_grad():
             outputs = model(input_frame)
+            if outputs.size(1) != len(class_names):  # Check if model output matches class names
+                print(f"Error: Model output size {outputs.size(1)} does not match number of class names {len(class_names)}.")
+                sys.exit(1)
             _, predicted = torch.max(outputs, 1)
             predicted_class = class_names[predicted.item()]
         current_item = predicted_class
