@@ -191,6 +191,52 @@ def display_warning(message):
     pygame.display.flip()
     time.sleep(3)  # Display the warning for 3 seconds
 
+# Import additional libraries for object detection
+from torchvision.models.detection import fasterrcnn_resnet50_fpn
+from torchvision.transforms import functional as F
+
+# Load a pre-trained object detection model
+detection_model = fasterrcnn_resnet50_fpn(pretrained=True)
+detection_model.eval()
+detection_model.to(device)
+
+# Function to detect objects and return bounding boxes and labels
+def detect_objects(frame):
+    # Convert the frame to a tensor and normalize it
+    frame_tensor = F.to_tensor(frame).unsqueeze(0).to(device)
+    with torch.no_grad():
+        predictions = detection_model(frame_tensor)[0]  # Get predictions for the frame
+
+    # Extract bounding boxes, labels, and scores
+    boxes = predictions['boxes'].cpu().numpy()  # Bounding boxes
+    labels = predictions['labels'].cpu().numpy()  # Class labels
+    scores = predictions['scores'].cpu().numpy()  # Confidence scores
+
+    # Filter predictions with confidence above a threshold (e.g., 0.7)
+    threshold = 0.7
+    filtered_boxes = []
+    filtered_labels = []
+    for box, label, score in zip(boxes, labels, scores):
+        if score >= threshold:
+            filtered_boxes.append(box)
+            filtered_labels.append(label)
+
+    return filtered_boxes, filtered_labels
+
+# Function to draw bounding boxes and labels on the frame
+def draw_boxes(frame, boxes, labels):
+    for box, label in zip(boxes, labels):
+        # Convert box coordinates to integers
+        x1, y1, x2, y2 = map(int, box)
+
+        # Draw the bounding box
+        pygame.draw.rect(frame, LIGHT_BLUE, (x1, y1, x2 - x1, y2 - y1), 2)
+
+        # Render the label text
+        label_text = f"Object: {label}"
+        text_surface = font_medium.render(label_text, True, BLACK)
+        frame.blit(text_surface, (x1, y1 - 20))  # Position the label above the box
+
 # Main loop
 while running:
     for event in pygame.event.get():
@@ -221,24 +267,27 @@ while running:
         frame = np.stack((frame,) * 3, axis=-1)
     elif frame.shape[2] == 4:  # If RGBA, convert to RGB
         frame = frame[:, :, :3]
+
+    # Detect objects in the frame
+    boxes, labels = detect_objects(frame)
+
+    # Convert the frame to a Pygame surface
     frame = np.rot90(frame)  # Rotate the frame if necessary for correct orientation
-    frame = pygame.surfarray.make_surface(frame)  # Convert to a Pygame surface
+    frame_surface = pygame.surfarray.make_surface(frame)  # Convert to a Pygame surface
+
+    # Draw bounding boxes and labels on the frame
+    draw_boxes(frame_surface, boxes, labels)
 
     # Center the camera feed
-    camera_feed_x = (screen_width - frame.get_width()) // 2
-    camera_feed_y = (screen_height - frame.get_height()) // 2
+    camera_feed_x = (screen_width - frame_surface.get_width()) // 2
+    camera_feed_y = (screen_height - frame_surface.get_height()) // 2
 
     # Clear screen
     screen.fill(WHITE)
 
-    # Render live camera feed
-    if frame:
-        screen.blit(frame, (camera_feed_x, camera_feed_y))
-
-    # Overlay object recognition data on the camera feed
-    recognition_text = f"Item: {current_item} (Confidence: {confidence:.2f})"
-    text_surface = font_medium.render(recognition_text, True, BLACK)
-    screen.blit(text_surface, (camera_feed_x + 10, camera_feed_y + 10))  # Position text near the top-left of the feed
+    # Render live camera feed with bounding boxes
+    if frame_surface:
+        screen.blit(frame_surface, (camera_feed_x, camera_feed_y))
 
     # Render labels
     text_surface = font_large.render(f"Smart Trash Can", True, BLACK)
