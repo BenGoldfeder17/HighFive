@@ -24,6 +24,11 @@ from torchvision import models
 # PyTorch model setup
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = models.resnet18(pretrained=True)
+
+# Modify the output layer to match the number of classes
+num_classes = len(class_names)  # Ensure this matches the number of class names
+model.fc = torch.nn.Linear(model.fc.in_features, num_classes)
+
 model.eval()
 model.to(device)
 
