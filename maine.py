@@ -135,7 +135,7 @@ def classify_and_act():
                 sys.exit(1)
             probabilities = torch.nn.functional.softmax(outputs[0], dim=0)  # Get probabilities
             confidence, predicted = torch.max(probabilities, 0)  # Get the highest confidence score
-            if confidence < 0.5:  # If confidence is below 50%, do not classify
+            if confidence < 0.7:  # If confidence is below 70%, do not classify
                 current_item = "Unrecognized"
                 print("Unrecognized item. Skipping classification.")
                 time.sleep(5)  # Add a delay before the next classification
@@ -145,11 +145,21 @@ def classify_and_act():
         if predicted_class == "Recyclable":
             recycle_count += 1
             rotate_left()
+            time.sleep(3.5)
+            stop_motor()
+            time.sleep(1)
+            rotate_right()
+            time.sleep(3.5)
+            stop_motor()
         else:
             trash_count += 1
             rotate_right()
-        time.sleep(3)
-        stop_motor()
+            time.sleep(3.5)
+            stop_motor()
+            time.sleep(1)
+            rotate_left()
+            time.sleep(3.5)
+            stop_motor()
         time.sleep(5)  # Add a 5-second delay after recognition
 
 # Initialize Picamera2
@@ -199,9 +209,9 @@ while running:
 
     # Check if either bin is at or above 90% capacity
     if recycle_percentage >= 90:
-        display_warning("Recyclable bin is almost full! Please switch it.")
+        display_warning("Recycle is full")
     if trash_percentage >= 90:
-        display_warning("Trash bin is almost full! Please switch it.")
+        display_warning("Trash is full")
 
     # Capture live camera feed
     frame = picam2.capture_array()  # Capture a frame as a NumPy array
