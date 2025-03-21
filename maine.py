@@ -144,6 +144,7 @@ def classify_and_act():
             rotate_right()
         time.sleep(3)
         stop_motor()
+        time.sleep(5)  # Add a 5-second delay after recognition
 
 # Initialize Picamera2
 picam2 = Picamera2()
@@ -191,6 +192,10 @@ while running:
         frame = frame[:, :, :3]
     frame = np.rot90(frame)  # Rotate the frame if necessary for correct orientation
     frame = pygame.surfarray.make_surface(frame)  # Convert to a Pygame surface
+
+    # Center the camera feed
+    camera_feed_x = (screen_width - frame.get_width()) // 2
+    camera_feed_y = (screen_height - frame.get_height()) // 2
 
     # Clear screen
     screen.fill(WHITE)
