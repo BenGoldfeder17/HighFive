@@ -8,7 +8,7 @@ if os.geteuid() != 0:
     sys.exit(1)
 
 # Ensure required packages are installed
-required_packages = ["RPi.GPIO", "torch", "torchvision", "opencv-python", "pygame"]
+required_packages = ["RPi.GPIO", "torch", "torchvision", "pygame"]
 for package in required_packages:
     try:
         __import__(package.split('-')[0])  # Import the package to check if it's installed
