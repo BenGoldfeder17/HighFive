@@ -216,6 +216,32 @@ detection_model = fasterrcnn_resnet50_fpn(pretrained=True)
 detection_model.eval()
 detection_model.to(device)
 
+# COCO class names (map relevant classes to "Recyclable" or "Trash")
+coco_classes = [
+    "__background__", "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat",
+    "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep",
+    "cow", "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee",
+    "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove", "skateboard", "surfboard",
+    "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple", "sandwich",
+    "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "couch", "potted plant", "bed",
+    "dining table", "toilet", "TV", "laptop", "mouse", "remote", "keyboard", "cell phone", "microwave", "oven",
+    "toaster", "sink", "refrigerator", "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"
+]
+
+# Map COCO classes to "Recyclable" or "Trash"
+recyclable_classes = {"bottle", "cup", "can", "box", "paper", "cardboard"}
+trash_classes = {"plastic bag", "food", "wrapper", "napkin"}
+
+# Function to classify detected objects as "Recyclable" or "Trash"
+def classify_coco_object(label):
+    class_name = coco_classes[label]
+    if class_name in recyclable_classes:
+        return "Recyclable"
+    elif class_name in trash_classes:
+        return "Trash"
+    else:
+        return "Unrecognized"
+
 # Function to detect objects and return bounding boxes and labels
 def detect_objects(frame):
     # Convert the frame to a tensor and normalize it
@@ -235,7 +261,7 @@ def detect_objects(frame):
     for box, label, score in zip(boxes, labels, scores):
         if score >= threshold:
             filtered_boxes.append(box)
-            filtered_labels.append(label)
+            filtered_labels.append(classify_coco_object(label))  # Classify as "Recyclable" or "Trash"
 
     return filtered_boxes, filtered_labels
 
@@ -249,7 +275,7 @@ def draw_boxes(frame, boxes, labels):
         pygame.draw.rect(frame, LIGHT_BLUE, (x1, y1, x2 - x1, y2 - y1), 2)
 
         # Render the label text
-        label_text = f"Object: {label}"
+        label_text = f"{label}"
         text_surface = font_medium.render(label_text, True, BLACK)
         frame.blit(text_surface, (x1, y1 - 20))  # Position the label above the box
 
