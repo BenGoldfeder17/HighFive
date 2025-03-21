@@ -22,6 +22,7 @@ packages = [
     "torchaudio",
     "opencv-python",
     "openvino",
+    "datasets",
 ]
 
 # Install each package if not already installed
