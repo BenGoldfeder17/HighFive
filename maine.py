@@ -92,7 +92,7 @@ def stop_motor():
 pygame.init()
 screen_width, screen_height = 720, 1280
 screen = pygame.display.set_mode((screen_width, screen_height))
-pygame.display.set_caption("Smart Trash Can"))
+pygame.display.set_caption("Smart Trash Can")
 
 # Colors
 WHITE, BLACK, LIGHT_BLUE, LIGHT_CORAL = (255, 255, 255), (0, 0, 0), (173, 216, 230), (240, 128, 128)
