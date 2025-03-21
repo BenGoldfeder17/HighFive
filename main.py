@@ -13,11 +13,19 @@ for package in required_packages:
     try:
         __import__(package.split('-')[0])  # Import the package to check if it's installed
     except ImportError:
+        print(f"{package} not found. Installing...")
         subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+
+# Explicitly check for TensorFlow
+try:
+    import tensorflow as tf
+except ImportError:
+    print("TensorFlow is not recognized. Attempting to reinstall...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "tensorflow"])
+    import tensorflow as tf
 
 import RPi.GPIO as GPIO
 import time
-import tensorflow as tf
 import cv2
 import pygame
 import threading
