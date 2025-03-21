@@ -111,8 +111,11 @@ while running:
     render_button(reset_button_rect, "Reset Counts", font_small, BUTTON_COLOR, BUTTON_HOVER_COLOR, mouse_pos)
     render_button(settings_button_rect, "Adjust Bin Capacity", font_small, BUTTON_COLOR, BUTTON_HOVER_COLOR, mouse_pos)
 
+    # Render current bin capacity
+    render_text_centered(f"Current Capacity: {bin_capacity} gallons", font_small, BLACK, 1000)
+
     # Update display
     pygame.display.flip()
 
 # Quit pygame
-pygame.quit() 
+pygame.quit()
