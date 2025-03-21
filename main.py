@@ -169,9 +169,15 @@ while running:
     # Capture live camera feed
     ret, frame = cap.read()
     if ret:
-        camera_feed = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  # Convert to RGB for Pygame
-        camera_feed = cv2.resize(camera_feed, (camera_feed_width, camera_feed_height))
-        camera_feed = pygame.surfarray.make_surface(camera_feed)
+        # Convert the frame to RGB format for Pygame
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        # Resize the frame to fit the designated area
+        frame = cv2.resize(frame, (camera_feed_width, camera_feed_height))
+        # Convert the frame to a Pygame surface
+        camera_feed = pygame.surfarray.make_surface(frame)
+        # Flip the surface vertically to match the camera's orientation
+        camera_feed = pygame.transform.rotate(camera_feed, -90)
+        camera_feed = pygame.transform.flip(camera_feed, True, False)
 
     # Clear screen
     screen.fill(WHITE)
