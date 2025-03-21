@@ -36,12 +36,12 @@ model.eval()
 model.to(device)
 
 # Image preprocessing
-img_height, img_width = 180, 180
+img_height, img_width = 224, 224  # Update to match ResNet18's expected input size
 preprocess = transforms.Compose([
     transforms.ToPILImage(),
-    transforms.Resize((img_height, img_width)),
+    transforms.Resize((img_height, img_width)),  # Resize to 224x224
     transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),  # Normalize as required by ResNet
 ])
 
 def preprocess_frame(frame):
