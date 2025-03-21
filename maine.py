@@ -44,7 +44,13 @@ preprocess = transforms.Compose([
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),  # Normalize as required by ResNet
 ])
 
+# Function to preprocess the frame for classification
 def preprocess_frame(frame):
+    # Ensure the frame is a valid 3D array (height, width, channels)
+    if frame.ndim == 2:  # If grayscale, convert to RGB
+        frame = np.stack((frame,) * 3, axis=-1)
+    elif frame.shape[2] == 4:  # If RGBA, convert to RGB
+        frame = frame[:, :, :3]
     return preprocess(frame).unsqueeze(0).to(device)
 
 import RPi.GPIO as GPIO
@@ -179,6 +185,10 @@ while running:
 
     # Capture live camera feed
     frame = picam2.capture_array()  # Capture a frame as a NumPy array
+    if frame.ndim == 2:  # If grayscale, convert to RGB
+        frame = np.stack((frame,) * 3, axis=-1)
+    elif frame.shape[2] == 4:  # If RGBA, convert to RGB
+        frame = frame[:, :, :3]
     frame = np.rot90(frame)  # Rotate the frame if necessary for correct orientation
     frame = pygame.surfarray.make_surface(frame)  # Convert to a Pygame surface
 
