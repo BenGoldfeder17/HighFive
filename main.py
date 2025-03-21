@@ -21,6 +21,9 @@ import torch
 import torchvision.transforms as transforms
 from torchvision import models
 
+# Class names (replace with your specific classes if needed)
+class_names = ["Recyclable", "Trash"]
+
 # PyTorch model setup
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = models.resnet18(pretrained=True)
@@ -31,9 +34,6 @@ model.fc = torch.nn.Linear(model.fc.in_features, num_classes)
 
 model.eval()
 model.to(device)
-
-# Class names (replace with your specific classes if needed)
-class_names = ["Recyclable", "Trash"]
 
 # Image preprocessing
 img_height, img_width = 180, 180
