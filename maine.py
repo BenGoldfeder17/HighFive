@@ -40,6 +40,7 @@ img_height, img_width = 224, 224  # Ensure input size matches ResNet18's expecte
 preprocess = transforms.Compose([
     transforms.ToPILImage(mode="RGB"),  # Ensure the image is in RGB format
     transforms.Resize((img_height, img_width)),  # Resize to 224x224
+    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),  # Add data augmentation
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),  # Normalize as required by ResNet
 ])
@@ -122,6 +123,13 @@ def adjust_capacity(change):
     global bin_capacity
     bin_capacity = max(1, bin_capacity + change)  # Ensure capacity is at least 1 gallon
 
+# Debugging: Add a function to log classification details
+def log_classification_details(probabilities, predicted_class, confidence):
+    print(f"Classification Details:")
+    print(f"Probabilities: {probabilities}")
+    print(f"Predicted Class: {predicted_class}")
+    print(f"Confidence: {confidence:.2f}")
+
 # Function to classify items and control the motor
 def classify_and_act():
     global current_item, trash_count, recycle_count, confidence
@@ -136,13 +144,14 @@ def classify_and_act():
                 sys.exit(1)
             probabilities = torch.nn.functional.softmax(outputs[0], dim=0)  # Get probabilities
             confidence, predicted = torch.max(probabilities, 0)  # Get the highest confidence score
-            if confidence < 0.65:  # If confidence is below 65%, do not classify
+            predicted_class = class_names[predicted.item()]
+            log_classification_details(probabilities.cpu().numpy(), predicted_class, confidence.item())  # Log details
+            if confidence < 0.6:  # If confidence is below 60%, do not classify
                 current_item = "Unrecognized"
                 confidence = 0.0  # Set confidence to 0 for unrecognized items
                 print("Unrecognized item. Skipping classification.")
                 time.sleep(5)  # Add a delay before the next classification
                 continue
-            predicted_class = class_names[predicted.item()]
         current_item = predicted_class
         if predicted_class == "Recyclable":
             recycle_count += 1
@@ -163,6 +172,13 @@ def classify_and_act():
             time.sleep(3.5)
             stop_motor()
         time.sleep(5)  # Add a 5-second delay after recognition
+
+import RPi.GPIO as GPIO
+import time
+import pygame
+import threading
+import numpy as np
+from picamera2 import Picamera2  # Import the Picamera2 library for libcamera
 
 # Initialize Picamera2
 picam2 = Picamera2()
