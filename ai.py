@@ -1,6 +1,6 @@
 import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras import layers
+import keras
+from keras import layers
 import os
 import pathlib
 import subprocess
@@ -30,6 +30,7 @@ for package in packages:
         __import__(package.split()[0])
     except ImportError:
         install_package(package)
+
 
 # Load dataset
 dataset_path = "viola77data/recycling-dataset"
