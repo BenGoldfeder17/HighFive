@@ -92,7 +92,7 @@ def stop_motor():
 pygame.init()
 screen_width, screen_height = 720, 1280
 screen = pygame.display.set_mode((screen_width, screen_height))
-pygame.display.setCaption("Smart Trash Can")
+pygame.display.set_caption("Smart Trash Can"))
 
 # Colors
 WHITE, BLACK, LIGHT_BLUE, LIGHT_CORAL = (255, 255, 255), (0, 0, 0), (173, 216, 230), (240, 128, 128)
@@ -163,14 +163,21 @@ threading.Thread(target=classify_and_act, daemon=True).start()
 
 # Button dimensions and positions
 button_width, button_height = 200, 50
-reset_button_x, reset_button_y = 50, screen_height - button_height - 50  # Bottom-left corner
-capacity_x, capacity_y = screen_width - button_width - 50, screen_height - button_height - 50  # Bottom-right corner
+reset_button_x, reset_button_y = 50, screen_height - button_height - 150  # Move reset button up
+capacity_x, capacity_y = screen_width - button_width - 50, screen_height - button_height - 150  # Move capacity buttons up
 camera_feed_width, camera_feed_height = screen_width // 3, screen_height // 3
 camera_feed_x, camera_feed_y = (screen_width - camera_feed_width) // 2, screen_height - camera_feed_height - 50  # Lower center
 
 # Function to check if a point is inside a rectangle
 def is_inside_rect(x, y, rect_x, rect_y, rect_width, rect_height):
     return rect_x <= x <= rect_x + rect_width and rect_y <= y <= rect_y + rect_height
+
+# Function to display a warning message
+def display_warning(message):
+    warning_surface = font_medium.render(message, True, LIGHT_CORAL)
+    screen.blit(warning_surface, (screen_width // 2 - warning_surface.get_width() // 2, screen_height // 2))
+    pygame.display.flip()
+    time.sleep(3)  # Display the warning for 3 seconds
 
 # Main loop
 while running:
@@ -189,6 +196,12 @@ while running:
     # Calculate percentages
     recycle_percentage = min((recycle_count * item_volume / bin_capacity) * 100, 100)
     trash_percentage = min((trash_count * item_volume / bin_capacity) * 100, 100)
+
+    # Check if either bin is at or above 90% capacity
+    if recycle_percentage >= 90:
+        display_warning("Recyclable bin is almost full! Please switch it.")
+    if trash_percentage >= 90:
+        display_warning("Trash bin is almost full! Please switch it.")
 
     # Capture live camera feed
     frame = picam2.capture_array()  # Capture a frame as a NumPy array
