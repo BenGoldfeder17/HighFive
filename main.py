@@ -10,6 +10,8 @@ import pygame
 import threading
 import time
 import RPi.GPIO as GPIO
+from huggingface_hub import login
+
 
 # Ensure required packages are installed in a virtual environment
 def install_packages():
