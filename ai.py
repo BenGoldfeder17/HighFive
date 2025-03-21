@@ -5,6 +5,7 @@ import os
 import pathlib
 import subprocess
 import sys
+from huggingface_hub import login
 
 # Function to install packages
 def install_package(package):
@@ -34,7 +35,7 @@ for package in packages:
 
 
 # Load dataset
-huggingface_hub.login(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,false, true,false)
+login(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,false, true,false)
 dataset_path = "viola77data/recycling-dataset"
 data_dir = pathlib.Path(dataset_path)
 
