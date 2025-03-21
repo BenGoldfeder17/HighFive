@@ -104,6 +104,7 @@ font_medium = pygame.font.Font(None, 60)
 # Variables
 running = True
 current_item = "Scanning..."
+confidence = 0.0  # Confidence score for the current classification
 trash_count, recycle_count = 0, 0
 bin_capacity = 10  # Default: 10 gallons
 item_volume = 0.15  # Assume each item takes 0.15 gallons
@@ -123,7 +124,7 @@ def adjust_capacity(change):
 
 # Function to classify items and control the motor
 def classify_and_act():
-    global current_item, trash_count, recycle_count
+    global current_item, trash_count, recycle_count, confidence
     while running:
         frame = picam2.capture_array()  # Capture a frame as a NumPy array
         frame = np.ascontiguousarray(frame)  # Ensure the frame is contiguous in memory
@@ -135,8 +136,9 @@ def classify_and_act():
                 sys.exit(1)
             probabilities = torch.nn.functional.softmax(outputs[0], dim=0)  # Get probabilities
             confidence, predicted = torch.max(probabilities, 0)  # Get the highest confidence score
-            if confidence <= 0.7:  # If confidence is below 70%, do not classify
+            if confidence < 0.7:  # If confidence is below 70%, do not classify
                 current_item = "Unrecognized"
+                confidence = 0.0  # Set confidence to 0 for unrecognized items
                 print("Unrecognized item. Skipping classification.")
                 time.sleep(5)  # Add a delay before the next classification
                 continue
@@ -229,11 +231,18 @@ while running:
     # Clear screen
     screen.fill(WHITE)
 
+    # Render live camera feed
+    if frame:
+        screen.blit(frame, (camera_feed_x, camera_feed_y))
+
+    # Overlay object recognition data on the camera feed
+    recognition_text = f"Item: {current_item} (Confidence: {confidence:.2f})"
+    text_surface = font_medium.render(recognition_text, True, BLACK)
+    screen.blit(text_surface, (camera_feed_x + 10, camera_feed_y + 10))  # Position text near the top-left of the feed
+
     # Render labels
     text_surface = font_large.render(f"Smart Trash Can", True, BLACK)
     screen.blit(text_surface, (screen_width // 2 - text_surface.get_width() // 2, 50))
-    text_surface = font_medium.render(f"Item: {current_item}", True, BLACK)
-    screen.blit(text_surface, (screen_width // 2 - text_surface.get_width() // 2, 150))
     text_surface = font_medium.render(f"Recyclable: {recycle_percentage:.1f}%", True, LIGHT_BLUE)
     screen.blit(text_surface, (screen_width // 2 - text_surface.get_width() // 2, 250))
     text_surface = font_medium.render(f"Trash: {trash_percentage:.1f}%", True, LIGHT_CORAL)
@@ -252,10 +261,6 @@ while running:
     screen.blit(right_arrow, (capacity_x + button_width - 30, capacity_y + button_height // 2 - right_arrow.get_height() // 2))
     text_surface = font_medium.render(f"{bin_capacity} gal", True, BLACK)
     screen.blit(text_surface, (capacity_x + button_width // 2 - text_surface.get_width() // 2, capacity_y + button_height // 2 - text_surface.get_height() // 2))
-
-    # Render live camera feed
-    if frame:
-        screen.blit(frame, (camera_feed_x, camera_feed_y))
 
     # Update display
     pygame.display.flip()
