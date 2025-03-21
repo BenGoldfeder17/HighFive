@@ -268,26 +268,27 @@ while running:
     elif frame.shape[2] == 4:  # If RGBA, convert to RGB
         frame = frame[:, :, :3]
 
-    # Detect objects in the frame
-    boxes, labels = detect_objects(frame)
+    # Rotate the frame if necessary for correct orientation
+    frame = np.rot90(frame)
 
-    # Convert the frame to a Pygame surface
-    frame = np.rot90(frame)  # Rotate the frame if necessary for correct orientation
+    # Ensure the frame is properly scaled to fit the GUI
+    frame = np.ascontiguousarray(frame)  # Ensure memory contiguity
     frame_surface = pygame.surfarray.make_surface(frame)  # Convert to a Pygame surface
-
-    # Draw bounding boxes and labels on the frame
-    draw_boxes(frame_surface, boxes, labels)
 
     # Center the camera feed
     camera_feed_x = (screen_width - frame_surface.get_width()) // 2
     camera_feed_y = (screen_height - frame_surface.get_height()) // 2
 
-    # Clear screen
+    # Clear screen with a fallback background color
     screen.fill(WHITE)
 
     # Render live camera feed with bounding boxes
     if frame_surface:
         screen.blit(frame_surface, (camera_feed_x, camera_feed_y))
+    else:
+        # If the frame is not available, display a fallback message
+        fallback_text = font_medium.render("Camera feed unavailable", True, BLACK)
+        screen.blit(fallback_text, (screen_width // 2 - fallback_text.get_width() // 2, screen_height // 2))
 
     # Render labels
     text_surface = font_large.render(f"Smart Trash Can", True, BLACK)
