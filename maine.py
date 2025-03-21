@@ -298,7 +298,7 @@ while running:
     # Clear screen with a fallback background color
     screen.fill(WHITE)
 
-    # Render live camera feed with bounding boxes
+    # Render live camera feed
     if frame_surface:
         screen.blit(frame_surface, (camera_feed_x, camera_feed_y))
     else:
@@ -306,8 +306,12 @@ while running:
         fallback_text = font_medium.render("Camera feed unavailable", True, BLACK)
         screen.blit(fallback_text, (screen_width // 2 - fallback_text.get_width() // 2, screen_height // 2))
 
+    # Render classification label
+    text_surface = font_medium.render(f"Item: {current_item}", True, BLACK)
+    screen.blit(text_surface, (screen_width // 2 - text_surface.get_width() // 2, 150))  # Original position
+
     # Render labels
-    text_surface = font_large.render(f"Smart Trash Can", True, BLACK)
+    text_surface = font_large.render(f"AI Trash", True, BLACK)
     screen.blit(text_surface, (screen_width // 2 - text_surface.get_width() // 2, 50))
     text_surface = font_medium.render(f"Recyclable: {recycle_percentage:.1f}%", True, LIGHT_BLUE)
     screen.blit(text_surface, (screen_width // 2 - text_surface.get_width() // 2, 250))
