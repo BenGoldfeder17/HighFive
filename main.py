@@ -8,7 +8,7 @@ if os.geteuid() != 0:
     sys.exit(1)
 
 # Ensure required packages are installed
-required_packages = ["RPi.GPIO", "tensorflow", "opencv-python", "pygame"]
+required_packages = ["RPi.GPIO", "torch", "torchvision", "opencv-python", "pygame"]
 for package in required_packages:
     try:
         __import__(package.split('-')[0])  # Import the package to check if it's installed
@@ -16,13 +16,31 @@ for package in required_packages:
         print(f"{package} not found. Installing...")
         subprocess.check_call([sys.executable, "-m", "pip", "install", package])
 
-# Explicitly check for TensorFlow
-try:
-    import tensorflow as tf
-except ImportError:
-    print("TensorFlow is not recognized. Attempting to reinstall...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "tensorflow"])
-    import tensorflow as tf
+# Import PyTorch and torchvision
+import torch
+import torchvision.transforms as transforms
+from torchvision import models
+
+# PyTorch model setup
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = models.resnet18(pretrained=True)
+model.eval()
+model.to(device)
+
+# Class names (replace with your specific classes if needed)
+class_names = ["Recyclable", "Trash"]
+
+# Image preprocessing
+img_height, img_width = 180, 180
+preprocess = transforms.Compose([
+    transforms.ToPILImage(),
+    transforms.Resize((img_height, img_width)),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+])
+
+def preprocess_frame(frame):
+    return preprocess(frame).unsqueeze(0).to(device)
 
 import RPi.GPIO as GPIO
 import time
@@ -58,16 +76,6 @@ def stop_motor():
     GPIO.output(IN2, GPIO.LOW)
     pwm.ChangeDutyCycle(0)
 
-# TensorFlow model setup
-model = tf.keras.models.load_model("recycling_model.h5")
-class_names = ["Recyclable", "Trash"]
-img_height, img_width = 180, 180
-
-def preprocess_frame(frame):
-    frame_resized = cv2.resize(frame, (img_width, img_height))
-    frame_normalized = frame_resized / 255.0
-    return tf.expand_dims(frame_normalized, axis=0)
-
 # Pygame setup
 pygame.init()
 screen_width, screen_height = 720, 1280
@@ -97,8 +105,10 @@ def classify_and_act():
         if not ret:
             continue
         input_frame = preprocess_frame(frame)
-        predictions = model.predict(input_frame)
-        predicted_class = class_names[tf.argmax(predictions[0])]
+        with torch.no_grad():
+            outputs = model(input_frame)
+            _, predicted = torch.max(outputs, 1)
+            predicted_class = class_names[predicted.item()]
         current_item = predicted_class
         if predicted_class == "Recyclable":
             recycle_count += 1
