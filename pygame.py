@@ -38,6 +38,11 @@ button_width, button_height = 300, 80
 reset_button_rect = pygame.Rect((screen_width // 2 - button_width // 2, 800), (button_width, button_height))
 settings_button_rect = pygame.Rect((screen_width // 2 - button_width // 2, 900), (button_width, button_height))
 
+# Arrow button dimensions
+arrow_button_size = 50
+increase_button_rect = pygame.Rect((screen_width // 2 + button_width // 2 + 10, 900), (arrow_button_size, arrow_button_size))
+decrease_button_rect = pygame.Rect((screen_width // 2 - button_width // 2 - 10 - arrow_button_size, 900), (arrow_button_size, arrow_button_size))
+
 # Function to simulate classifying items continuously (Replace with actual detection)
 def classify_item():
     global trash_count, recycle_count, current_item
@@ -72,6 +77,13 @@ def render_button(rect, text, font, color, hover_color, mouse_pos):
     text_rect = text_surface.get_rect(center=rect.center)
     screen.blit(text_surface, text_rect)
 
+# Function to render an arrow button
+def render_arrow_button(rect, text, font, color, hover_color, mouse_pos):
+    pygame.draw.rect(screen, hover_color if rect.collidepoint(mouse_pos) else color, rect, border_radius=10)
+    text_surface = font.render(text, True, WHITE)
+    text_rect = text_surface.get_rect(center=rect.center)
+    screen.blit(text_surface, text_rect)
+
 # Start the classification thread
 threading.Thread(target=classify_item, daemon=True).start()
 
@@ -92,7 +104,11 @@ while running:
         if reset_button_rect.collidepoint(mouse_pos):
             reset_counts()
         elif settings_button_rect.collidepoint(mouse_pos):
-            bin_capacity = max(4, min(32, bin_capacity + 1))  # Example adjustment
+            pass  # Placeholder for settings button
+        elif increase_button_rect.collidepoint(mouse_pos):
+            bin_capacity = min(32, bin_capacity + 1)  # Increase capacity
+        elif decrease_button_rect.collidepoint(mouse_pos):
+            bin_capacity = max(4, bin_capacity - 1)  # Decrease capacity
 
     # Calculate percentages
     recycle_percentage = min((recycle_count * item_volume / bin_capacity) * 100, 100)
@@ -110,6 +126,10 @@ while running:
     # Render buttons
     render_button(reset_button_rect, "Reset Counts", font_small, BUTTON_COLOR, BUTTON_HOVER_COLOR, mouse_pos)
     render_button(settings_button_rect, "Adjust Bin Capacity", font_small, BUTTON_COLOR, BUTTON_HOVER_COLOR, mouse_pos)
+
+    # Render arrow buttons
+    render_arrow_button(increase_button_rect, "+", font_small, BUTTON_COLOR, BUTTON_HOVER_COLOR, mouse_pos)
+    render_arrow_button(decrease_button_rect, "-", font_small, BUTTON_COLOR, BUTTON_HOVER_COLOR, mouse_pos)
 
     # Render current bin capacity
     render_text_centered(f"Current Capacity: {bin_capacity} gallons", font_small, BLACK, 1000)
