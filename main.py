@@ -1,136 +1,156 @@
-import time
-import cv2
-import numpy as np
-import RPi.GPIO as GPIO
 import tensorflow as tf
-from picamera import PiCamera
+import keras
+from keras import layers
+import os
+import pathlib
+import subprocess
+import sys
+import cv2
+import pygame
+import threading
+import time
+import RPi.GPIO as GPIO
 
-# --- Servo Motor Setup ---
-# Define the GPIO pin connected to the servo
-SERVO_PIN = 18
+# Ensure required packages are installed in a virtual environment
+def install_packages():
+    required_packages = [
+        "tensorflow", "keras", "opencv-python", "pygame", "RPi.GPIO"
+    ]
+    for package in required_packages:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", package])
 
-# Setup GPIO using BCM numbering and initialize PWM for the servo at 50Hz.
+# Call the package installer
+install_packages()
+
+# Initialize Pygame
+pygame.init()
+
+# Screen dimensions and setup
+screen_width, screen_height = 720, 1280
+screen = pygame.display.set_mode((screen_width, screen_height))
+pygame.display.set_caption("Smart Trash Can")
+
+# Colors
+WHITE = (255, 255, 255)
+LIGHT_BLUE = (173, 216, 230)
+LIGHT_CORAL = (240, 128, 128)
+BLACK = (0, 0, 0)
+GRAY = (200, 200, 200)
+
+# Fonts
+font_large = pygame.font.Font(None, 80)
+font_medium = pygame.font.Font(None, 60)
+font_small = pygame.font.Font(None, 40)
+
+# GPIO setup for motor control
+IN1 = 23
+IN2 = 24
+ENA = 5
 GPIO.setmode(GPIO.BCM)
-GPIO.setup(SERVO_PIN, GPIO.OUT)
-pwm = GPIO.PWM(SERVO_PIN, 50)  # 50 Hz frequency
+GPIO.setup(IN1, GPIO.OUT)
+GPIO.setup(IN2, GPIO.OUT)
+GPIO.setup(ENA, GPIO.OUT)
+pwm = GPIO.PWM(ENA, 1000)  # 1000 Hz frequency
 pwm.start(0)
 
-def set_servo_angle(angle):
-    """
-    Converts an angle (in degrees) to the appropriate PWM duty cycle and
-    moves the servo to that angle.
-    """
-    # Typical conversion for many servos: duty cycle = angle/18 + 2
-    duty = angle / 18 + 2
-    GPIO.output(SERVO_PIN, True)
-    pwm.ChangeDutyCycle(duty)
-    time.sleep(0.5)  # Allow time for servo to move
-    GPIO.output(SERVO_PIN, False)
+def rotate_left(speed=100):
+    GPIO.output(IN1, GPIO.HIGH)
+    GPIO.output(IN2, GPIO.LOW)
+    pwm.ChangeDutyCycle(speed)
+
+def rotate_right(speed=100):
+    GPIO.output(IN1, GPIO.LOW)
+    GPIO.output(IN2, GPIO.HIGH)
+    pwm.ChangeDutyCycle(speed)
+
+def stop_motor():
+    GPIO.output(IN1, GPIO.LOW)
+    GPIO.output(IN2, GPIO.LOW)
     pwm.ChangeDutyCycle(0)
 
-# --- Object Categories Mapping ---
-# Define a set of COCO class labels that you consider recyclable.
-# Adjust or expand this list as needed.
-recycling_items = {'bottle', 'can', 'cup', 'box'}
+# Load the trained model
+model = keras.models.load_model("recycling_model.h5")
 
-# --- Load TensorFlow Model and Labels ---
-MODEL_PATH = 'detect.pb'    # Path to your TensorFlow detection model
-LABELS_PATH = 'labelmap.txt'      # Path to your label map file
+# Parameters
+img_height, img_width = 180, 180
+class_names = ["Recyclable", "Trash"]  # Replace with actual class names if available
 
-# Load the TensorFlow model
-model = tf.saved_model.load(MODEL_PATH)
+# Function to preprocess frames
+def preprocess_frame(frame):
+    frame_resized = cv2.resize(frame, (img_width, img_height))
+    frame_normalized = frame_resized / 255.0
+    return tf.expand_dims(frame_normalized, axis=0)
 
-def load_labels(path):
-    """
-    Loads the label map from a file. The file should have one label per line.
-    """
-    with open(path, 'r') as f:
-        return {i: line.strip() for i, line in enumerate(f.readlines())}
+# Variables
+current_item = "Scanning..."
+recycle_count = 0
+trash_count = 0
+running = True
 
-labels = load_labels(LABELS_PATH)
+# Function to classify items and control the motor
+def classify_and_control():
+    global current_item, recycle_count, trash_count
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        print("Error: Could not open video feed.")
+        sys.exit(1)
 
-# --- Camera Setup ---
-# Initialize the PiCamera.
-camera = PiCamera()
-camera.resolution = (640, 480)
-camera.framerate = 30
+    while running:
+        ret, frame = cap.read()
+        if not ret:
+            print("Error: Failed to capture frame.")
+            break
 
-def capture_image():
-    """
-    Captures an image from the Pi Camera and returns it as a NumPy array.
-    """
-    image = np.empty((480, 640, 3), dtype=np.uint8)
-    camera.capture(image, 'rgb')
-    return image
+        # Preprocess and classify the frame
+        input_frame = preprocess_frame(frame)
+        predictions = model.predict(input_frame)
+        predicted_class = class_names[tf.argmax(predictions[0])]
+        current_item = predicted_class
 
-# --- Image Preprocessing and Detection ---
-def process_image(image):
-    """
-    Resizes and normalizes the captured image to match the model's input requirements.
-    """
-    input_shape = [1, 640, 480, 3]  # Example input shape
-    img_resized = cv2.resize(image, (input_shape[2], input_shape[1]))
-    # Expand dimensions and normalize the pixel values (example normalization)
-    input_data = np.expand_dims(img_resized, axis=0).astype(np.float32)
-    input_data = (input_data - 127.5) / 127.5
-    return input_data
+        # Update counts and control motor
+        if predicted_class == "Recyclable":
+            recycle_count += 1
+            rotate_left()
+            time.sleep(3.5)
+            stop_motor()
+        elif predicted_class == "Trash":
+            trash_count += 1
+            rotate_right()
+            time.sleep(3.5)
+            stop_motor()
 
-def detect_objects(image):
-    """
-    Runs inference on the image and returns bounding boxes, class indices,
-    confidence scores, and number of detections.
-    """
-    input_data = process_image(image)
-    detections = model(input_data)
-    
-    # Retrieve detection results from the model
-    boxes = detections['detection_boxes'][0].numpy()     # Bounding boxes
-    classes = detections['detection_classes'][0].numpy()   # Class indices
-    scores = detections['detection_scores'][0].numpy()    # Confidence scores
-    num = len(boxes)       # Number of detections
-    return boxes, classes, scores, num
+        time.sleep(1)  # Pause before next classification
 
-def determine_category(classes, scores, threshold=0.5):
-    """
-    Checks the detected objects. If any detection with confidence above the threshold
-    is in the recycling_items list, returns 'recycling'; otherwise returns 'trash'.
-    """
-    category = 'trash'
-    for i, score in enumerate(scores):
-        if score > threshold:
-            label = labels.get(int(classes[i]), 'unknown')
-            print(f"Detected: {label} with confidence {score:.2f}")
-            if label in recycling_items:
-                category = 'recycling'
-                break
-    return category
+    cap.release()
 
-# --- Main Loop ---
-def main():
-    try:
-        while True:
-            print("Capturing image...")
-            image = capture_image()
+# Function to render text centered on the screen
+def render_text_centered(text, font, color, y):
+    text_surface = font.render(text, True, color)
+    text_rect = text_surface.get_rect(center=(screen_width // 2, y))
+    screen.blit(text_surface, text_rect)
 
-            print("Performing object detection...")
-            boxes, classes, scores, num = detect_objects(image)
-            category = determine_category(classes, scores)
+# Start the classification thread
+threading.Thread(target=classify_and_control, daemon=True).start()
 
-            if category == 'recycling':
-                print("Item is recyclable. Adjusting servo for recycling bin.")
-                set_servo_angle(90)  # Rotate servo to 90° for recycling
-            else:
-                print("Item is trash. Adjusting servo for trash bin.")
-                set_servo_angle(0)   # Rotate servo to 0° for trash
+# Main loop for Pygame interface
+while running:
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
 
-            # Pause before the next detection cycle
-            time.sleep(2)
-    except KeyboardInterrupt:
-        print("Stopping program...")
-    finally:
-        pwm.stop()
-        GPIO.cleanup()
-        camera.close()
+    # Clear screen
+    screen.fill(WHITE)
 
-if __name__ == '__main__':
-    main()
+    # Render labels
+    render_text_centered(f"Smart Trash Can", font_large, BLACK, 100)
+    render_text_centered(f"Item: {current_item}", font_medium, GRAY, 250)
+    render_text_centered(f"Recyclable Count: {recycle_count}", font_medium, LIGHT_BLUE, 400)
+    render_text_centered(f"Trash Count: {trash_count}", font_medium, LIGHT_CORAL, 500)
+
+    # Update display
+    pygame.display.flip()
+
+# Cleanup
+pygame.quit()
+pwm.stop()
+GPIO.cleanup()
