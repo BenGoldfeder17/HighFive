@@ -135,7 +135,7 @@ def classify_and_act():
                 sys.exit(1)
             probabilities = torch.nn.functional.softmax(outputs[0], dim=0)  # Get probabilities
             confidence, predicted = torch.max(probabilities, 0)  # Get the highest confidence score
-            if confidence < 0.7:  # If confidence is below 70%, do not classify
+            if confidence <= 0.7:  # If confidence is below 70%, do not classify
                 current_item = "Unrecognized"
                 print("Unrecognized item. Skipping classification.")
                 time.sleep(5)  # Add a delay before the next classification
