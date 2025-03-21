@@ -136,14 +136,16 @@ def classify_and_act():
 # Start the classification thread
 threading.Thread(target=classify_and_act, daemon=True).start()
 
-# Button dimensions and position
+# Button dimensions and positions
 button_width, button_height = 200, 50
-button_x = screen_width // 2 - button_width // 2
-button_y = 600
+reset_button_x, reset_button_y = 50, screen_height - button_height - 50  # Bottom-left corner
+capacity_x, capacity_y = screen_width - button_width - 50, screen_height - button_height - 50  # Bottom-right corner
+camera_feed_width, camera_feed_height = screen_width // 3, screen_height // 3
+camera_feed_x, camera_feed_y = (screen_width - camera_feed_width) // 2, screen_height - camera_feed_height - 50  # Lower center
 
-# Function to check if a point is inside the button
-def is_inside_button(x, y):
-    return button_x <= x <= button_x + button_width and button_y <= y <= button_y + button_height
+# Function to check if a point is inside a rectangle
+def is_inside_rect(x, y, rect_x, rect_y, rect_width, rect_height):
+    return rect_x <= x <= rect_x + rect_width and rect_y <= y <= rect_y + rect_height
 
 # Main loop
 cap = cv2.VideoCapture(0)  # Initialize camera
@@ -153,12 +155,11 @@ while running:
             running = False
         elif event.type == pygame.MOUSEBUTTONDOWN:  # Check for mouse click
             mouse_x, mouse_y = event.pos
-            if is_inside_button(mouse_x, mouse_y):  # If click is inside the reset button
+            if is_inside_rect(mouse_x, mouse_y, reset_button_x, reset_button_y, button_width, button_height):  # Reset button
                 reset_counts()
-        elif event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_LEFT:  # Decrease capacity on left arrow
+            elif is_inside_rect(mouse_x, mouse_y, capacity_x, capacity_y, button_width // 2, button_height):  # Left arrow
                 adjust_capacity(-1)
-            elif event.key == pygame.K_RIGHT:  # Increase capacity on right arrow
+            elif is_inside_rect(mouse_x, mouse_y, capacity_x + button_width // 2, capacity_y, button_width // 2, button_height):  # Right arrow
                 adjust_capacity(1)
 
     # Calculate percentages
@@ -169,7 +170,7 @@ while running:
     ret, frame = cap.read()
     if ret:
         camera_feed = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  # Convert to RGB for Pygame
-        camera_feed = cv2.resize(camera_feed, (screen_width // 2, screen_height // 2))
+        camera_feed = cv2.resize(camera_feed, (camera_feed_width, camera_feed_height))
         camera_feed = pygame.surfarray.make_surface(camera_feed)
 
     # Clear screen
@@ -185,22 +186,23 @@ while running:
     text_surface = font_medium.render(f"Trash: {trash_percentage:.1f}%", True, LIGHT_CORAL)
     screen.blit(text_surface, (screen_width // 2 - text_surface.get_width() // 2, 350))
 
+    # Render reset button
+    pygame.draw.rect(screen, LIGHT_BLUE, (reset_button_x, reset_button_y, button_width, button_height))
+    text_surface = font_medium.render("Reset", True, BLACK)
+    screen.blit(text_surface, (reset_button_x + button_width // 2 - text_surface.get_width() // 2, reset_button_y + button_height // 2 - text_surface.get_height() // 2))
+
     # Render capacity adjustment
-    text_surface = font_medium.render(f"Capacity: {bin_capacity} gallons", True, BLACK)
-    screen.blit(text_surface, (screen_width // 2 - text_surface.get_width() // 2, 450))
+    pygame.draw.rect(screen, LIGHT_BLUE, (capacity_x, capacity_y, button_width, button_height))
     left_arrow = font_medium.render("<", True, BLACK)
     right_arrow = font_medium.render(">", True, BLACK)
-    screen.blit(left_arrow, (screen_width // 2 - 100, 450))
-    screen.blit(right_arrow, (screen_width // 2 + 100, 450))
-
-    # Render reset button
-    pygame.draw.rect(screen, LIGHT_BLUE, (button_x, button_y, button_width, button_height))
-    text_surface = font_medium.render("Reset", True, BLACK)
-    screen.blit(text_surface, (button_x + button_width // 2 - text_surface.get_width() // 2, button_y + button_height // 2 - text_surface.get_height() // 2))
+    screen.blit(left_arrow, (capacity_x + 10, capacity_y + button_height // 2 - left_arrow.get_height() // 2))
+    screen.blit(right_arrow, (capacity_x + button_width - 30, capacity_y + button_height // 2 - right_arrow.get_height() // 2))
+    text_surface = font_medium.render(f"{bin_capacity} gal", True, BLACK)
+    screen.blit(text_surface, (capacity_x + button_width // 2 - text_surface.get_width() // 2, capacity_y + button_height // 2 - text_surface.get_height() // 2))
 
     # Render live camera feed
     if camera_feed:
-        screen.blit(camera_feed, (screen_width // 4, screen_height // 2))
+        screen.blit(camera_feed, (camera_feed_x, camera_feed_y))
 
     # Update display
     pygame.display.flip()
