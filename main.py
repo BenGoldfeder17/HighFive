@@ -95,6 +95,19 @@ current_item = "Scanning..."
 trash_count, recycle_count = 0, 0
 bin_capacity = 10  # Default: 10 gallons
 item_volume = 0.15  # Assume each item takes 0.15 gallons
+camera_feed = None  # Variable to store the live camera feed
+
+# Function to reset counts
+def reset_counts():
+    global trash_count, recycle_count, current_item
+    trash_count = 0
+    recycle_count = 0
+    current_item = "Scanning..."
+
+# Function to adjust bin capacity
+def adjust_capacity(change):
+    global bin_capacity
+    bin_capacity = max(1, bin_capacity + change)  # Ensure capacity is at least 1 gallon
 
 # Function to classify items and control the motor
 def classify_and_act():
@@ -123,33 +136,77 @@ def classify_and_act():
 # Start the classification thread
 threading.Thread(target=classify_and_act, daemon=True).start()
 
+# Button dimensions and position
+button_width, button_height = 200, 50
+button_x = screen_width // 2 - button_width // 2
+button_y = 600
+
+# Function to check if a point is inside the button
+def is_inside_button(x, y):
+    return button_x <= x <= button_x + button_width and button_y <= y <= button_y + button_height
+
 # Main loop
+cap = cv2.VideoCapture(0)  # Initialize camera
 while running:
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
+        elif event.type == pygame.MOUSEBUTTONDOWN:  # Check for mouse click
+            mouse_x, mouse_y = event.pos
+            if is_inside_button(mouse_x, mouse_y):  # If click is inside the reset button
+                reset_counts()
+        elif event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_LEFT:  # Decrease capacity on left arrow
+                adjust_capacity(-1)
+            elif event.key == pygame.K_RIGHT:  # Increase capacity on right arrow
+                adjust_capacity(1)
 
     # Calculate percentages
     recycle_percentage = min((recycle_count * item_volume / bin_capacity) * 100, 100)
     trash_percentage = min((trash_count * item_volume / bin_capacity) * 100, 100)
+
+    # Capture live camera feed
+    ret, frame = cap.read()
+    if ret:
+        camera_feed = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  # Convert to RGB for Pygame
+        camera_feed = cv2.resize(camera_feed, (screen_width // 2, screen_height // 2))
+        camera_feed = pygame.surfarray.make_surface(camera_feed)
 
     # Clear screen
     screen.fill(WHITE)
 
     # Render labels
     text_surface = font_large.render(f"Smart Trash Can", True, BLACK)
-    screen.blit(text_surface, (screen_width // 2 - text_surface.get_width() // 2, 100))
+    screen.blit(text_surface, (screen_width // 2 - text_surface.get_width() // 2, 50))
     text_surface = font_medium.render(f"Item: {current_item}", True, BLACK)
-    screen.blit(text_surface, (screen_width // 2 - text_surface.get_width() // 2, 250))
+    screen.blit(text_surface, (screen_width // 2 - text_surface.get_width() // 2, 150))
     text_surface = font_medium.render(f"Recyclable: {recycle_percentage:.1f}%", True, LIGHT_BLUE)
-    screen.blit(text_surface, (screen_width // 2 - text_surface.get_width() // 2, 400))
+    screen.blit(text_surface, (screen_width // 2 - text_surface.get_width() // 2, 250))
     text_surface = font_medium.render(f"Trash: {trash_percentage:.1f}%", True, LIGHT_CORAL)
-    screen.blit(text_surface, (screen_width // 2 - text_surface.get_width() // 2, 500))
+    screen.blit(text_surface, (screen_width // 2 - text_surface.get_width() // 2, 350))
+
+    # Render capacity adjustment
+    text_surface = font_medium.render(f"Capacity: {bin_capacity} gallons", True, BLACK)
+    screen.blit(text_surface, (screen_width // 2 - text_surface.get_width() // 2, 450))
+    left_arrow = font_medium.render("<", True, BLACK)
+    right_arrow = font_medium.render(">", True, BLACK)
+    screen.blit(left_arrow, (screen_width // 2 - 100, 450))
+    screen.blit(right_arrow, (screen_width // 2 + 100, 450))
+
+    # Render reset button
+    pygame.draw.rect(screen, LIGHT_BLUE, (button_x, button_y, button_width, button_height))
+    text_surface = font_medium.render("Reset", True, BLACK)
+    screen.blit(text_surface, (button_x + button_width // 2 - text_surface.get_width() // 2, button_y + button_height // 2 - text_surface.get_height() // 2))
+
+    # Render live camera feed
+    if camera_feed:
+        screen.blit(camera_feed, (screen_width // 4, screen_height // 2))
 
     # Update display
     pygame.display.flip()
 
 # Cleanup
+cap.release()  # Release camera
 pwm.stop()
 GPIO.cleanup()
 pygame.quit()
