@@ -8,7 +8,7 @@ if os.geteuid() != 0:
     sys.exit(1)
 
 # Ensure required packages are installed
-required_packages = ["RPi.GPIO", "torch", "torchvision", "pygame"]
+required_packages = ["RPi.GPIO", "torch", "torchvision", "pygame", "numpy", "picamera2"]
 for package in required_packages:
     try:
         __import__(package.split('-')[0])  # Import the package to check if it's installed
@@ -44,9 +44,10 @@ def preprocess_frame(frame):
 
 import RPi.GPIO as GPIO
 import time
-import cv2
 import pygame
 import threading
+import numpy as np
+from picamera2 import Picamera2  # Import the Picamera2 library for libcamera
 
 # GPIO setup
 try:
@@ -112,11 +113,8 @@ def adjust_capacity(change):
 # Function to classify items and control the motor
 def classify_and_act():
     global current_item, trash_count, recycle_count
-    cap = cv2.VideoCapture(0)
     while running:
-        ret, frame = cap.read()
-        if not ret:
-            continue
+        frame = picam2.capture_array()  # Capture a frame as a NumPy array
         input_frame = preprocess_frame(frame)
         with torch.no_grad():
             outputs = model(input_frame)
@@ -131,7 +129,12 @@ def classify_and_act():
             rotate_right()
         time.sleep(3)
         stop_motor()
-    cap.release()
+
+# Initialize Picamera2
+picam2 = Picamera2()
+camera_config = picam2.create_preview_configuration(main={"size": (640, 480)})
+picam2.configure(camera_config)
+picam2.start()
 
 # Start the classification thread
 threading.Thread(target=classify_and_act, daemon=True).start()
@@ -148,7 +151,6 @@ def is_inside_rect(x, y, rect_x, rect_y, rect_width, rect_height):
     return rect_x <= x <= rect_x + rect_width and rect_y <= y <= rect_y + rect_height
 
 # Main loop
-cap = cv2.VideoCapture(0)  # Initialize camera
 while running:
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
@@ -167,17 +169,10 @@ while running:
     trash_percentage = min((trash_count * item_volume / bin_capacity) * 100, 100)
 
     # Capture live camera feed
-    ret, frame = cap.read()
-    if ret:
-        # Convert the frame to RGB format for Pygame
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        # Resize the frame to fit the designated area
-        frame = cv2.resize(frame, (camera_feed_width, camera_feed_height))
-        # Convert the frame to a Pygame surface
-        camera_feed = pygame.surfarray.make_surface(frame)
-        # Flip the surface vertically to match the camera's orientation
-        camera_feed = pygame.transform.rotate(camera_feed, -90)
-        camera_feed = pygame.transform.flip(camera_feed, True, False)
+    frame = picam2.capture_array()  # Capture a frame as a NumPy array
+    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  # Convert to RGB format for Pygame
+    frame = cv2.resize(frame, (camera_feed_width, camera_feed_height))  # Resize the frame
+    camera_feed = pygame.surfarray.make_surface(frame)  # Convert to a Pygame surface
 
     # Clear screen
     screen.fill(WHITE)
@@ -204,7 +199,7 @@ while running:
     screen.blit(left_arrow, (capacity_x + 10, capacity_y + button_height // 2 - left_arrow.get_height() // 2))
     screen.blit(right_arrow, (capacity_x + button_width - 30, capacity_y + button_height // 2 - right_arrow.get_height() // 2))
     text_surface = font_medium.render(f"{bin_capacity} gal", True, BLACK)
-    screen.blit(text_surface, (capacity_x + button_width // 2 - text_surface.get_width() // 2, capacity_y + button_height // 2 - text_surface.get_height() // 2))
+    screen.blit(text_surface, (capacity_x + button_width // 2 - text_surface.get_width() // 2, capacity_y + button_height // 2 - text_surface.get.height() // 2))
 
     # Render live camera feed
     if camera_feed:
@@ -214,7 +209,7 @@ while running:
     pygame.display.flip()
 
 # Cleanup
-cap.release()  # Release camera
+picam2.stop()  # Stop the camera
 pwm.stop()
 GPIO.cleanup()
 pygame.quit()
