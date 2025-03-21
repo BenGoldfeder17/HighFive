@@ -92,7 +92,7 @@ def stop_motor():
 pygame.init()
 screen_width, screen_height = 720, 1280
 screen = pygame.display.set_mode((screen_width, screen_height))
-pygame.display.set_caption("Smart Trash Can")
+pygame.display.setCaption("Smart Trash Can")
 
 # Colors
 WHITE, BLACK, LIGHT_BLUE, LIGHT_CORAL = (255, 255, 255), (0, 0, 0), (173, 216, 230), (240, 128, 128)
@@ -133,7 +133,13 @@ def classify_and_act():
             if outputs.size(1) != len(class_names):  # Check if model output matches class names
                 print(f"Error: Model output size {outputs.size(1)} does not match number of class names {len(class_names)}.")
                 sys.exit(1)
-            _, predicted = torch.max(outputs, 1)
+            probabilities = torch.nn.functional.softmax(outputs[0], dim=0)  # Get probabilities
+            confidence, predicted = torch.max(probabilities, 0)  # Get the highest confidence score
+            if confidence < 0.5:  # If confidence is below 50%, do not classify
+                current_item = "Unrecognized"
+                print("Unrecognized item. Skipping classification.")
+                time.sleep(5)  # Add a delay before the next classification
+                continue
             predicted_class = class_names[predicted.item()]
         current_item = predicted_class
         if predicted_class == "Recyclable":
