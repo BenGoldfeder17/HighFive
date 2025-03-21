@@ -34,6 +34,7 @@ for package in packages:
 
 
 # Load dataset
+login(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,false, true,false)
 dataset_path = "viola77data/recycling-dataset"
 data_dir = pathlib.Path(dataset_path)
 
