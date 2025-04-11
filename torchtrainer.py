@@ -1,9 +1,11 @@
+import os
+import csv
 import torch
-from torchvision import transforms, datasets  # Updated import for datasets
+from torchvision import transforms, datasets
 from torch.optim import Adam
 from torch.utils.data import DataLoader
-from PIL import Image  # Import to handle image loading errors
-from tqdm import tqdm  # Import tqdm for progress bars
+from PIL import Image
+from tqdm import tqdm
 
 # Define device
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -15,25 +17,76 @@ preprocess = transforms.Compose([
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
 ])
 
-# Custom loader to handle invalid files
-def safe_loader(path):
-    try:
-        return Image.open(path).convert('RGB')  # Ensure all images are RGB
-    except Exception as e:
-        print(f"Error loading image: {path}, skipping. Error: {e}")
-        return None
+# Folder containing images to classify
+image_folder = 'path_to_image_folder'  # Replace with the folder path containing your images
+output_csv = 'classified_data.csv'
 
-# Update dataset to use the custom loader
-dataset = datasets.ImageFolder(
-    root='F:\chive\garbage-dataset',
-    transform=preprocess,
-    loader=safe_loader  # Use the custom loader
-)
+# Function to classify images based on folder structure
+def classify_images_by_folder(image_folder, output_csv):
+    # Ensure the output CSV file is created
+    with open(output_csv, mode='w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(['Image', 'Label'])  # Header row
 
-# Filter out None entries caused by invalid files
-valid_indices = [i for i, (path, _) in enumerate(dataset.samples) if dataset.loader(path) is not None]
-dataset.samples = [dataset.samples[i] for i in valid_indices]
-dataset.targets = [dataset.targets[i] for i in valid_indices]
+    # Iterate through subfolders (e.g., "trash" and "recycling")
+    for label, subfolder in enumerate(['trash', 'recycling']):
+        subfolder_path = os.path.join(image_folder, subfolder)
+        if not os.path.exists(subfolder_path):
+            print(f"Subfolder '{subfolder}' not found in {image_folder}, skipping.")
+            continue
+
+        for image_name in os.listdir(subfolder_path):
+            image_path = os.path.join(subfolder_path, image_name)
+            if not image_name.lower().endswith(('.png', '.jpg', '.jpeg')):
+                print(f"Skipping non-image file: {image_name}")
+                continue
+
+            try:
+                # Load and preprocess the image to ensure it's valid
+                image = Image.open(image_path).convert('RGB')
+                preprocess(image)  # Ensure image is valid for preprocessing
+
+                # Save the classification to the CSV file
+                with open(output_csv, mode='a', newline='') as file:
+                    writer = csv.writer(file)
+                    writer.writerow([os.path.join(subfolder, image_name), label])
+
+            except Exception as e:
+                print(f"Error processing image {image_name}: {e}")
+
+# Function to load dataset from CSV
+def load_dataset_from_csv(image_folder, csv_file, transform):
+    samples = []
+    with open(csv_file, mode='r') as file:
+        reader = csv.DictReader(file)
+        for row in reader:
+            image_path = os.path.join(image_folder, row['Image'])
+            label = int(row['Label'])
+            samples.append((image_path, label))
+
+    # Custom dataset class
+    class CustomDataset(torch.utils.data.Dataset):
+        def __init__(self, samples, transform):
+            self.samples = samples
+            self.transform = transform
+
+        def __len__(self):
+            return len(self.samples)
+
+        def __getitem__(self, idx):
+            image_path, label = self.samples[idx]
+            image = Image.open(image_path).convert('RGB')
+            image = self.transform(image)
+            return image, label
+
+    return CustomDataset(samples, transform)
+
+# Run classification based on folder structure if CSV does not exist
+if not os.path.exists(output_csv):
+    classify_images_by_folder(image_folder, output_csv)
+
+# Load dataset from CSV
+dataset = load_dataset_from_csv(image_folder, output_csv, preprocess)
 
 # Split dataset into training and validation sets
 train_size = int(0.8 * len(dataset))
