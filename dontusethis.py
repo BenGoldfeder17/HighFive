@@ -111,8 +111,11 @@ def classify_and_act():
         avg_color = np.mean(frame, axis=(0,1))
         print(f"Average color: {avg_color}")
 
-        # Classification: require green to be significantly higher (at least 1.5x) than both red and blue
-        if avg_color[1] > 1.5 * avg_color[0] and avg_color[1] > 1.5 * avg_color[2]:
+        # New classification:
+        # Average red and blue:
+        avg_rb = (avg_color[0] + avg_color[2]) / 2
+        # If green is at least 1.3 times the average of red and blue, classify as "Recyclable"
+        if avg_color[1] > 1.3 * avg_rb:
             predicted_class = "Recyclable"
         else:
             predicted_class = "Trash"
