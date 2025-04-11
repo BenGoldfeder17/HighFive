@@ -1,7 +1,8 @@
 import os
 import csv
 import torch
-from torchvision import transforms, datasets
+import pandas as pd  # Needed for parquet support
+from torchvision import transforms, datasets 
 from torch.optim import Adam
 from torch.utils.data import DataLoader
 from PIL import Image
@@ -17,16 +18,15 @@ preprocess = transforms.Compose([
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
 ])
 
-# Folder containing images to classify
-image_folder = 'path_to_image_folder'  # Replace with the folder path containing your images
-output_csv = 'classified_data.csv'
+# Folder containing images to classify, and output file
+image_folder = 'path_to_image_folder'  # Replace with your folder containing images
+# Change the extension here to either '.csv' or '.parquet' depending on your needs
+output_data_file = 'classified_data.parquet'
 
 # Function to classify images based on folder structure
-def classify_images_by_folder(image_folder, output_csv):
-    # Ensure the output CSV file is created
-    with open(output_csv, mode='w', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerow(['Image', 'Label'])  # Header row
+def classify_images_by_folder(image_folder, output_data_file):
+    output_ext = os.path.splitext(output_data_file)[1].lower()
+    data_entries = []
 
     # Iterate through subfolders (e.g., "trash" and "recycling")
     for label, subfolder in enumerate(['trash', 'recycling']):
@@ -44,25 +44,44 @@ def classify_images_by_folder(image_folder, output_csv):
             try:
                 # Load and preprocess the image to ensure it's valid
                 image = Image.open(image_path).convert('RGB')
-                preprocess(image)  # Ensure image is valid for preprocessing
-
-                # Save the classification to the CSV file
-                with open(output_csv, mode='a', newline='') as file:
-                    writer = csv.writer(file)
-                    writer.writerow([os.path.join(subfolder, image_name), label])
-
+                preprocess(image)  # Validate image by running through the transforms
+                data_entries.append({'Image': os.path.join(subfolder, image_name), 'Label': label})
             except Exception as e:
                 print(f"Error processing image {image_name}: {e}")
 
-# Function to load dataset from CSV
-def load_dataset_from_csv(image_folder, csv_file, transform):
+    # Write the collected data to the file based on the file extension
+    if output_ext == '.csv':
+        with open(output_data_file, mode='w', newline='') as file:
+            writer = csv.DictWriter(file, fieldnames=['Image', 'Label'])
+            writer.writeheader()
+            for row in data_entries:
+                writer.writerow(row)
+    elif output_ext == '.parquet':
+        df = pd.DataFrame(data_entries)
+        df.to_parquet(output_data_file, index=False)
+    else:
+        raise ValueError("Unsupported file extension for output file. Use .csv or .parquet")
+
+# Function to load dataset from either CSV or Parquet
+def load_dataset_from_file(image_folder, data_file, transform):
     samples = []
-    with open(csv_file, mode='r') as file:
-        reader = csv.DictReader(file)
-        for row in reader:
+    ext = os.path.splitext(data_file)[1].lower()
+
+    if ext == '.csv':
+        with open(data_file, mode='r') as file:
+            reader = csv.DictReader(file)
+            for row in reader:
+                image_path = os.path.join(image_folder, row['Image'])
+                label = int(row['Label'])
+                samples.append((image_path, label))
+    elif ext == '.parquet':
+        df = pd.read_parquet(data_file)
+        for _, row in df.iterrows():
             image_path = os.path.join(image_folder, row['Image'])
             label = int(row['Label'])
             samples.append((image_path, label))
+    else:
+        raise ValueError("Unsupported data file format. Use .csv or .parquet")
 
     # Custom dataset class
     class CustomDataset(torch.utils.data.Dataset):
@@ -81,12 +100,12 @@ def load_dataset_from_csv(image_folder, csv_file, transform):
 
     return CustomDataset(samples, transform)
 
-# Run classification based on folder structure if CSV does not exist
-if not os.path.exists(output_csv):
-    classify_images_by_folder(image_folder, output_csv)
+# Run classification based on folder structure if the data file does not exist yet
+if not os.path.exists(output_data_file):
+    classify_images_by_folder(image_folder, output_data_file)
 
-# Load dataset from CSV
-dataset = load_dataset_from_csv(image_folder, output_csv, preprocess)
+# Load dataset from CSV or Parquet file
+dataset = load_dataset_from_file(image_folder, output_data_file, preprocess)
 
 # Split dataset into training and validation sets
 train_size = int(0.8 * len(dataset))
@@ -125,7 +144,6 @@ def fine_tune_model(model, train_loader, val_loader, num_epochs=5, learning_rate
         # Validation loop
         model.eval()
         val_loss = 0.0
-        # Add progress bar for validation
         with torch.no_grad():
             for images, labels in tqdm(val_loader, desc="Validation", leave=False):
                 images, labels = images.to(device), labels.to(device)
@@ -161,7 +179,7 @@ def predict(image_path, model, preprocess):
         predicted_class = torch.argmax(output, dim=1).item()
     return predicted_class
 
-# Example usage
+# Example usage for inference
 loaded_model = load_model('garbage_classifier.pth')
 test_image_path = 'path_to_test_image.jpg'  # Replace with your test image path
 predicted_class = predict(test_image_path, loaded_model, preprocess)
