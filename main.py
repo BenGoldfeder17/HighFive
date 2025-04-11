@@ -1,9 +1,8 @@
 import os
-import sys
 import subprocess
+import sys
 import torch
 import torchvision.transforms as transforms
-from torchvision import models
 import numpy as np
 import pygame
 import time
@@ -20,7 +19,7 @@ if os.geteuid() != 0:
 required_packages = ["RPi.GPIO", "torch", "torchvision", "pygame", "numpy", "picamera2"]
 for package in required_packages:
     try:
-        __import__(package.split('-')[0])
+        __import__(package.split('-')[0])  # Import the package to check if it's installed
     except ImportError:
         print(f"{package} not found. Installing...")
         subprocess.check_call([sys.executable, "-m", "pip", "install", package])
@@ -31,18 +30,20 @@ class_names = ["Recyclable", "Trash"]
 # PyTorch model setup
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Function to load the pretrained model
-def load_pretrained_model(model_path, num_classes):
-    model = models.resnet18(pretrained=False)  # Ensure the architecture matches the saved model
-    model.fc = torch.nn.Linear(model.fc.in_features, num_classes)  # Adjust the output layer
-    model.load_state_dict(torch.load(model_path, map_location=device))  # Load the .pth file
-    model.eval()  # Set the model to evaluation mode
-    model.to(device)  # Move the model to the appropriate device
+# Define the model architecture matching the .pth file
+def load_pretrained_model(model_path):
+    model = torch.nn.Sequential(
+        torch.nn.Linear(3 * 224 * 224, 10)  # Adjust input/output dimensions as needed
+    )
+    state_dict = torch.load(model_path, map_location=device)
+    model.load_state_dict(state_dict)
+    model.eval()
+    model.to(device)
     return model
 
 # Load the pretrained model
 model_path = "garbage_classifier.pth"  # Replace with the actual path to your .pth file
-model = load_pretrained_model(model_path, num_classes=len(class_names))
+model = load_pretrained_model(model_path)
 
 # Image preprocessing
 img_height, img_width = 224, 224
