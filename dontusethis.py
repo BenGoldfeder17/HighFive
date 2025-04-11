@@ -85,35 +85,59 @@ def adjust_capacity(change):
     bin_capacity = max(1, bin_capacity + change)
 
 # ----------------------------
-# Camera Initialization
+# Camera Initialization and Background Capture
 # ----------------------------
 picam2 = Picamera2()
 camera_config = picam2.create_preview_configuration(main={"size": (640, 480)})
 picam2.configure(camera_config)
 picam2.start()
 
+# Allow the camera to stabilize, then capture the background frame
+time.sleep(2)
+background_frame = picam2.capture_array()
+if background_frame.ndim == 2:  # convert grayscale to RGB
+    background_frame = np.stack((background_frame,)*3, axis=-1)
+elif background_frame.shape[2] == 4:  # drop alpha channel if present
+    background_frame = background_frame[:, :, :3]
+background_frame = np.ascontiguousarray(background_frame)
+
 # ----------------------------
-# Classification Function Using Color Detection
+# Classification Function Using Red Detection & Foreground Extraction
 # ----------------------------
 def classify_and_act():
-    global current_item, trash_count, recycle_count
+    global current_item, trash_count, recycle_count, background_frame
     while running:
         frame = picam2.capture_array()  # Capture frame as a NumPy array
-
-        # Ensure the frame is in RGB format:
-        if frame.ndim == 2:  # Grayscale -> convert to RGB
+        if frame.ndim == 2:
             frame = np.stack((frame,)*3, axis=-1)
-        elif frame.shape[2] == 4:  # RGBA -> drop alpha channel
+        elif frame.shape[2] == 4:
             frame = frame[:, :, :3]
         frame = np.ascontiguousarray(frame)
-
-        # Compute the average color (R, G, B)
-        avg_color = np.mean(frame, axis=(0,1))
-        print(f"Average color: {avg_color}")
-
-        # New classification rule:
-        # If the green channel's average value is over 90, classify as "Recyclable"
-        if avg_color[1] > 90:
+        
+        # Compute absolute difference between current frame and background
+        diff = np.abs(frame.astype(np.float32) - background_frame.astype(np.float32))
+        diff_gray = np.mean(diff, axis=2)
+        # Create mask for pixels that differ significantly (threshold set at 20)
+        mask = diff_gray > 20
+        # Calculate the ratio of changed pixels
+        changed_ratio = np.sum(mask) / mask.size
+        if changed_ratio < 0.1:
+            # Less than 10% pixels changed – no significant foreground.
+            current_item = "No Movement"
+            print("No significant change detected.")
+            time.sleep(5)
+            continue
+        
+        # Compute average red value over the foreground (changed pixels)
+        if np.sum(mask) > 0:
+            avg_red = np.mean(frame[:,:,0][mask])
+        else:
+            avg_red = np.mean(frame[:,:,0])
+        print(f"Foreground average red: {avg_red}")
+        
+        # New classification rule using red channel:
+        # If the average red value on foreground pixels is over 90, classify as "Recyclable"
+        if avg_red > 90:
             predicted_class = "Recyclable"
         else:
             predicted_class = "Trash"
@@ -129,7 +153,7 @@ def classify_and_act():
             rotate_right()
             time.sleep(3.5)
             stop_motor()
-        else:
+        elif predicted_class == "Trash":
             trash_count += 1
             rotate_right()
             time.sleep(3.5)
@@ -141,7 +165,7 @@ def classify_and_act():
 
         time.sleep(5)
 
-# Start classification in a separate thread
+# Start the classification in a separate thread
 threading.Thread(target=classify_and_act, daemon=True).start()
 
 # ----------------------------
