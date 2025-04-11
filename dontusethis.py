@@ -93,27 +93,26 @@ picam2.configure(camera_config)
 picam2.start()
 
 # ----------------------------
-# New Classification Function Using Color Detection
+# Classification Function Using Color Detection
 # ----------------------------
 def classify_and_act():
     global current_item, trash_count, recycle_count
     while running:
-        frame = picam2.capture_array()  # capture frame as a NumPy array
+        frame = picam2.capture_array()  # Capture frame as a NumPy array
 
-        # Ensure frame is in RGB format
-        if frame.ndim == 2:  # For grayscale
+        # Ensure frame is in RGB format:
+        if frame.ndim == 2:  # Grayscale -> convert to RGB
             frame = np.stack((frame,)*3, axis=-1)
-        elif frame.shape[2] == 4:  # For RGBA, drop alpha channel
+        elif frame.shape[2] == 4:  # RGBA -> drop alpha
             frame = frame[:, :, :3]
         frame = np.ascontiguousarray(frame)
 
         # Compute average color (R, G, B)
         avg_color = np.mean(frame, axis=(0,1))
-        # Debug log: print average color
         print(f"Average color: {avg_color}")
 
-        # Simple color detection: if green channel is dominant, mark as "Recyclable"
-        if avg_color[1] > avg_color[0] and avg_color[1] > avg_color[2]:
+        # Classification: require green to be significantly higher (at least 1.5x) than both red and blue
+        if avg_color[1] > 1.5 * avg_color[0] and avg_color[1] > 1.5 * avg_color[2]:
             predicted_class = "Recyclable"
         else:
             predicted_class = "Trash"
@@ -150,7 +149,6 @@ threading.Thread(target=classify_and_act, daemon=True).start()
 button_width, button_height = 200, 50
 reset_button_x, reset_button_y = 50, screen_height - button_height - 150
 capacity_x, capacity_y = screen_width - button_width - 50, screen_height - button_height - 150
-camera_feed_width, camera_feed_height = screen_width // 3, screen_height // 3
 
 def is_inside_rect(x, y, rect_x, rect_y, rect_width, rect_height):
     return rect_x <= x <= rect_x + rect_width and rect_y <= y <= rect_y + rect_height
@@ -185,7 +183,7 @@ while running:
     if trash_percentage >= 90:
         display_warning("Trash is full")
 
-    # Get the latest camera image for display
+    # Obtain latest camera image for display
     frame = picam2.capture_array()
     if frame.ndim == 2:
         frame = np.stack((frame,)*3, axis=-1)
