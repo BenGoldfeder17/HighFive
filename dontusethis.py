@@ -100,22 +100,20 @@ def classify_and_act():
     while running:
         frame = picam2.capture_array()  # Capture frame as a NumPy array
 
-        # Ensure frame is in RGB format:
+        # Ensure the frame is in RGB format:
         if frame.ndim == 2:  # Grayscale -> convert to RGB
             frame = np.stack((frame,)*3, axis=-1)
-        elif frame.shape[2] == 4:  # RGBA -> drop alpha
+        elif frame.shape[2] == 4:  # RGBA -> drop alpha channel
             frame = frame[:, :, :3]
         frame = np.ascontiguousarray(frame)
 
-        # Compute average color (R, G, B)
+        # Compute the average color (R, G, B)
         avg_color = np.mean(frame, axis=(0,1))
         print(f"Average color: {avg_color}")
 
-        # New classification:
-        # Average red and blue:
-        avg_rb = (avg_color[0] + avg_color[2]) / 2
-        # If green is at least 1.3 times the average of red and blue, classify as "Recyclable"
-        if avg_color[1] > 1.3 * avg_rb:
+        # New classification rule:
+        # If the green channel's average value is over 90, classify as "Recyclable"
+        if avg_color[1] > 90:
             predicted_class = "Recyclable"
         else:
             predicted_class = "Trash"
@@ -176,7 +174,7 @@ while running:
             elif is_inside_rect(mouse_x, mouse_y, capacity_x + button_width//2, capacity_y, button_width//2, button_height):
                 adjust_capacity(1)
 
-    # Calculate percentages based on counts and capacity
+    # Calculate fill percentages based on counts and capacity
     recycle_percentage = min((recycle_count * item_volume / bin_capacity) * 100, 100)
     trash_percentage = min((trash_count * item_volume / bin_capacity) * 100, 100)
 
