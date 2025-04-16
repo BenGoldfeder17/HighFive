@@ -1,119 +1,142 @@
 import os
+import csv
 import torch
+import torch.nn as nn
 from torchvision import transforms
 from torch.optim import Adam
-from torch.utils.data import DataLoader
-from PIL import Image
-from tqdm import tqdm  # for progress display
+from torch.utils.data import DataLoader, random_split
+from PIL import Image, UnidentifiedImageError
+from tqdm import tqdm
 
-# Set device for training
+# Set device for training and inference
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Define preprocessing (resizing, normalization) for images
+target_size = (224, 224)
 preprocess = transforms.Compose([
-    transforms.Resize((224, 224)),
+    transforms.Resize(target_size),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406],
                          std=[0.229, 0.224, 0.225]),
 ])
 
-# Folder containing images (should have 'trash' and 'recycling' subfolders)
-image_folder = '/Users/Blake/Documents/GEEN1400/dataset-original'  # Replace with the actual folder path
+# Path to your image folder (must contain subfolders like 'trash', 'recycling')
+image_folder = 'path_to_image_folder'  # TODO: replace with your actual path
+output_csv = 'classified_data.csv'
 
-# Function to load dataset directly from the image folder
-def load_dataset_from_folder(image_folder, transform):
-    samples = []
+# 1) Function to classify images by folder and write CSV of (relative_path, label)
+def classify_images_by_folder(folder, csv_path):
+    # Write header
+    with open(csv_path, mode='w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['Image', 'Label'])
 
-    # Iterate through both subfolders and assign labels
-    for label, subfolder in enumerate(['trash', 'recycling']):
-        subfolder_path = os.path.join(image_folder, subfolder)
-        if not os.path.exists(subfolder_path):
-            print(f"Subfolder '{subfolder}' not found in {image_folder}, skipping.")
-            continue
-        for image_name in os.listdir(subfolder_path):
-            image_path = os.path.join(subfolder_path, image_name)
-            if not image_name.lower().endswith(('.png', '.jpg', '.jpeg')):
-                print(f"Skipping non-image file: {image_name}")
+    # Iterate subfolders and assign numeric labels
+    classes = sorted([d for d in os.listdir(folder) if os.path.isdir(os.path.join(folder, d))])
+    for label, sub in enumerate(classes):
+        sub_path = os.path.join(folder, sub)
+        for fname in os.listdir(sub_path):
+            if not fname.lower().endswith(('.png', '.jpg', '.jpeg')):
                 continue
+            rel_path = os.path.join(sub, fname)
             try:
-                # Validate the image by opening it
-                image = Image.open(image_path).convert('RGB')
-                preprocess(image)  # Run the image through preprocessing
-                samples.append((image_path, label))
+                img = Image.open(os.path.join(folder, rel_path)).convert('RGB')
+                preprocess(img)  # validate preprocessing
+                with open(csv_path, mode='a', newline='') as f:
+                    writer = csv.writer(f)
+                    writer.writerow([rel_path, label])
             except Exception as e:
-                print(f"Error processing image {image_name}: {e}")
+                print(f"Error processing {rel_path}: {e}")
 
-    if len(samples) == 0:
-        raise ValueError("No valid images found in the dataset folder. Ensure the 'trash' and 'recycling' subfolders contain valid images.")
+# 2) Function to load dataset from the generated CSV
+class CustomDataset(torch.utils.data.Dataset):
+    def __init__(self, samples, transform):
+        self.samples = samples
+        self.transform = transform
 
-    # Custom dataset class
-    class CustomDataset(torch.utils.data.Dataset):
-        def __init__(self, samples, transform):
-            self.samples = samples
-            self.transform = transform
+    def __len__(self):
+        return len(self.samples)
 
-        def __len__(self):
-            return len(self.samples)
+    def __getitem__(self, idx):
+        path, label = self.samples[idx]
+        img = Image.open(path).convert('RGB')
+        img = self.transform(img)
+        return img, label
 
-        def __getitem__(self, idx):
-            image_path, label = self.samples[idx]
-            image = Image.open(image_path).convert('RGB')
-            image = self.transform(image)
-            return image, label
 
+def load_dataset_from_csv(folder, csv_file, transform):
+    samples = []
+    with open(csv_file, mode='r') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            img_path = os.path.join(folder, row['Image'])
+            label = int(row['Label'])
+            samples.append((img_path, label))
     return CustomDataset(samples, transform)
 
-# Load dataset directly from the image folder
-dataset = load_dataset_from_folder(image_folder, preprocess)
+# Create CSV if missing
+def prepare_csv():
+    if not os.path.exists(output_csv):
+        classify_images_by_folder(image_folder, output_csv)
 
-# Split dataset into training and validation subsets
-train_size = int(0.8 * len(dataset))
-val_size = len(dataset) - train_size
-train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
-train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
+# Main execution
+if __name__ == '__main__':
+    # Step 1: Ensure CSV exists
+    prepare_csv()
 
-# Define the correct model architecture matching the saved state_dict.
-# Here, we assume the model is a sequential model with a Flatten layer followed by a Linear layer.
-model = torch.nn.Sequential(
-    torch.nn.Flatten(),
-    torch.nn.Linear(3 * 224 * 224, 10)  # 10 output classes (adjust as needed)
-).to(device)
+    # Step 2: Load dataset and split
+    dataset = load_dataset_from_csv(image_folder, output_csv, preprocess)
+    total = len(dataset)
+    train_size = int(0.8 * total)
+    val_size = total - train_size
+    train_ds, val_ds = random_split(dataset, [train_size, val_size])
+    train_loader = DataLoader(train_ds, batch_size=16, shuffle=True)
+    val_loader = DataLoader(val_ds, batch_size=16, shuffle=False)
 
-# Training loop (runs synchronously)
-def fine_tune_model(model, train_loader, val_loader, num_epochs=5, learning_rate=1e-4):
-    optimizer = Adam(model.parameters(), lr=learning_rate)
-    criterion = torch.nn.CrossEntropyLoss()
-    for epoch in range(num_epochs):
+    # Step 3: Determine number of classes
+    classes = sorted([d for d in os.listdir(image_folder) if os.path.isdir(os.path.join(image_folder, d))])
+    num_classes = len(classes)
+    print(f"Detected classes {classes} → num_classes = {num_classes}")
+
+    # Step 4: Build model (Flatten → Linear)
+    model = nn.Sequential(
+        nn.Flatten(),
+        nn.Linear(3 * target_size[0] * target_size[1], num_classes)
+    ).to(device)
+
+    # Training routine
+def fine_tune_model(model, train_loader, val_loader, epochs=5, lr=1e-4):
+    optimizer = Adam(model.parameters(), lr=lr)
+    criterion = nn.CrossEntropyLoss()
+
+    for epoch in range(epochs):
         model.train()
-        train_loss = 0.0
-        for images, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} - Training"):
-            images, labels = images.to(device), labels.to(device)
+        running = 0.0
+        for imgs, lbls in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs} [Train]"):
+            imgs, lbls = imgs.to(device), lbls.to(device)
             optimizer.zero_grad()
-            outputs = model(images)
-            loss = criterion(outputs, labels)
+            out = model(imgs)
+            loss = criterion(out, lbls)
             loss.backward()
             optimizer.step()
-            train_loss += loss.item()
-        avg_train_loss = train_loss / len(train_loader)
-        print(f"Epoch {epoch+1}/{num_epochs} Training Loss: {avg_train_loss:.4f}")
-        
-        # Validate after each epoch
+            running += loss.item()
+        print(f"Epoch {epoch+1} Training Loss: {running/len(train_loader):.4f}")
+
         model.eval()
-        val_loss = 0.0
+        vloss = 0.0
         with torch.no_grad():
-            for images, labels in tqdm(val_loader, desc=f"Epoch {epoch+1}/{num_epochs} - Validation"):
-                images, labels = images.to(device), labels.to(device)
-                outputs = model(images)
-                loss = criterion(outputs, labels)
-                val_loss += loss.item()
-        avg_val_loss = val_loss / len(val_loader)
-        print(f"Epoch {epoch+1}/{num_epochs} Validation Loss: {avg_val_loss:.4f}")
+            for imgs, lbls in tqdm(val_loader, desc=f"Epoch {epoch+1}/{epochs} [Val]"):
+                imgs, lbls = imgs.to(device), lbls.to(device)
+                out = model(imgs)
+                loss = criterion(out, lbls)
+                vloss += loss.item()
+        print(f"Epoch {epoch+1} Validation Loss: {vloss/len(val_loader):.4f}")
         model.train()
 
-# Train the model synchronously
-fine_tune_model(model, train_loader, val_loader)
+    # Execute training
+    fine_tune_model(model, train_loader, val_loader)
 
-# Save the trained model state dict
-torch.save(model.state_dict(), 'garbage_classifier.pth')
-print("Model saved as 'garbage_classifier.pth'.")
+    # Save state dict
+    save_name = 'garbage_classifier.pth'
+    torch.save(model.state_dict(), save_name)
+    print(f"Model saved as '{save_name}'")
