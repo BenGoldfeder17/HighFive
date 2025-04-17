@@ -1,188 +1,196 @@
-#!/usr/bin/env python3
-# main.py — inference script updated to use standalone Keras instead of tensorflow.keras
-
+#!/home/highfive/Downloads/highfive/Downloads/bin/python3.11
 import os
-import subprocess
-import sys
 
-# Ensure the script is running as root
-if os.geteuid() != 0:
-    print("Error: This script must be run as root. Try using 'sudo'.")
-    sys.exit(1)
+# On a 64‑bit Pi 5 the MMIO base is at 0xFE000000
+os.environ["BCM2835_PERI_BASE"] = "0xFE000000"
+os.environ["BCM2708_PERI_BASE"] = "0xFE000000"
 
-# Ensure required packages are installed
-required_packages = ["RPi.GPIO", "keras", "pygame", "numpy", "picamera2"]
-for pkg in required_packages:
-    name = pkg.split('-')[0]
-    try:
-        __import__(name)
-    except ImportError:
-        print(f"{pkg} not found. Installing…")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
-
-# -------------------------------
-# 1) Keras + model setup
-# -------------------------------
-from keras.models import load_model
-from keras.preprocessing.image import smart_resize
+import time
+import threading
+import tensorflow as tf
 import numpy as np
+import RPi.GPIO as GPIO
+import pygame
+from picamera2 import Picamera2
 
-# Class names must match training labels
-class_names = ["Recyclable", "Trash"]
+# ---------------------------------------------------------------------
+# 1) Keras + model setup
+# ---------------------------------------------------------------------
+BASE_DIR   = os.path.dirname(os.path.realpath(__file__))
+MODEL_PATH = os.path.join(BASE_DIR, "trash_recycling_model.keras")
 
-# Load the Keras model (native .keras format)
-MODEL_PATH = "trash_recycling_model.keras"
-model = load_model(MODEL_PATH)
-print(f"[INFO] Loaded Keras model '{MODEL_PATH}' with classes {class_names}")
+class_names = ["Recyclable", "Trash", "Unknown"]
+model       = tf.keras.models.load_model(MODEL_PATH)
 
-# Image size used during training
 IMG_H, IMG_W = 150, 150
+ITEM_WEIGHT  = 0.125   # lbs per item
+DIFF_THRESH  = 5      # threshold for object presence
 
-# -------------------------------
-# 2) Preprocessing helper
-# -------------------------------
-def preprocess_frame(frame: np.ndarray) -> np.ndarray:
-    """
-    - frame: HxWxC numpy array from Picamera2
-    - returns: 1xIMG_HxIMG_Wx3 array normalized [0,1]
-    """
-    # Ensure RGB
+def preprocess_frame(frame: np.ndarray) -> tf.Tensor:
     if frame.ndim == 2:
         frame = np.stack((frame,)*3, axis=-1)
     elif frame.shape[2] == 4:
         frame = frame[:, :, :3]
-    # Normalize to [0,1]
-    img = frame.astype('float32') / 255.0
-    # Resize to model input
-    img = smart_resize(img, (IMG_H, IMG_W))
-    # Add batch dimension
-    return np.expand_dims(img, axis=0)
+    img = tf.convert_to_tensor(frame, dtype=tf.float32) / 255.0
+    img = tf.image.resize(img, [IMG_H, IMG_W])
+    return tf.expand_dims(img, axis=0)
 
 def classify_frame(frame: np.ndarray):
-    """
-    Returns (predicted_class:str, confidence:float)
-    """
-    inp = preprocess_frame(frame)
-    probs = model.predict(inp)[0]
+    inp   = preprocess_frame(frame)
+    probs = model(inp, training=False)[0].numpy()
     idx   = int(np.argmax(probs))
-    return class_names[idx], float(probs[idx])
+    conf  = float(probs[idx])
+    label = class_names[idx] if conf >= 0.6 else "Unknown"
+    return label, conf
 
 # ---------------------------------------------------------------------
-# 3) All existing GPIO, Picamera2, motor, and pygame UI code follows
-#    unchanged except it now calls classify_frame().
+# 2) GPIO & motor setup
 # ---------------------------------------------------------------------
-
-import RPi.GPIO as GPIO
-import time
-import pygame
-import threading
-from picamera2 import Picamera2
-
-# GPIO motor pins
 IN1, IN2, ENA = 23, 24, 5
 GPIO.setmode(GPIO.BCM)
-GPIO.setup(IN1, GPIO.OUT)
-GPIO.setup(IN2, GPIO.OUT)
-GPIO.setup(ENA, GPIO.OUT)
-pwm = GPIO.PWM(ENA, 1000)
-pwm.start(0)
+GPIO.setup(IN1, GPIO.OUT); GPIO.setup(IN2, GPIO.OUT); GPIO.setup(ENA, GPIO.OUT)
+pwm = GPIO.PWM(ENA, 1000); pwm.start(0)
 
 def rotate_left(speed=100):
-    GPIO.output(IN1, GPIO.HIGH)
-    GPIO.output(IN2, GPIO.LOW)
-    pwm.ChangeDutyCycle(speed)
-
+    GPIO.output(IN1, GPIO.HIGH); GPIO.output(IN2, GPIO.LOW); pwm.ChangeDutyCycle(speed)
 def rotate_right(speed=100):
-    GPIO.output(IN1, GPIO.LOW)
-    GPIO.output(IN2, GPIO.HIGH)
-    pwm.ChangeDutyCycle(speed)
-
+    GPIO.output(IN1, GPIO.LOW);  GPIO.output(IN2, GPIO.HIGH); pwm.ChangeDutyCycle(speed)
 def stop_motor():
-    GPIO.output(IN1, GPIO.LOW)
-    GPIO.output(IN2, GPIO.LOW)
-    pwm.ChangeDutyCycle(0)
+    GPIO.output(IN1, GPIO.LOW);  GPIO.output(IN2, GPIO.LOW);  pwm.ChangeDutyCycle(0)
 
-# Pygame UI setup
+# ---------------------------------------------------------------------
+# 3) Picamera2 setup + capture background
+# ---------------------------------------------------------------------
+picam2 = Picamera2()
+cfg   = picam2.create_preview_configuration(main={"size": (640,480)})
+picam2.configure(cfg)
+picam2.start()
+time.sleep(2)  # let exposure settle
+background = picam2.capture_array().astype(np.int16)
+
+# ---------------------------------------------------------------------
+# 4) Shared state & classification thread
+# ---------------------------------------------------------------------
+running         = True
+current_item    = "Waiting for Object"
+confidence      = 0.0
+trash_weight    = 0.0
+recycle_weight  = 0.0
+bin_capacity    = 10.0   # gallons
+
+def classify_and_act():
+    global current_item, confidence, trash_weight, recycle_weight
+    while running:
+        frame = picam2.capture_array()
+        diff_val = np.mean(np.abs(frame.astype(np.int16) - background))
+        if diff_val < DIFF_THRESH:
+            current_item = "Waiting for Object"
+            confidence   = 0.0
+        else:
+            # mask out unchanged pixels by turning them white
+            diff_map = np.mean(np.abs(frame.astype(np.int16) - background), axis=2)
+            mask     = diff_map >= DIFF_THRESH
+            proc     = frame.copy()
+            proc[~mask] = 255
+
+            time.sleep(2)  # wait before identifying
+            pred, conf = classify_frame(proc)
+            current_item = pred
+            confidence   = conf
+
+            if pred == "Recyclable":
+                recycle_weight += ITEM_WEIGHT
+                rotate_left();  time.sleep(3.5); stop_motor()
+                time.sleep(1)
+                rotate_right(); time.sleep(3.5); stop_motor()
+            elif pred == "Trash":
+                trash_weight += ITEM_WEIGHT
+                rotate_right(); time.sleep(3.5); stop_motor()
+                time.sleep(1)
+                rotate_left();  time.sleep(3.5); stop_motor()
+
+        time.sleep(5)
+
+threading.Thread(target=classify_and_act, daemon=True).start()
+
+# ---------------------------------------------------------------------
+# 5) Pygame UI setup
+# ---------------------------------------------------------------------
 pygame.init()
-screen_width, screen_height = 720, 1280
-screen = pygame.display.set_mode((screen_width, screen_height))
-pygame.display.set_caption("Smart Trash Can")
+SCREEN_W, SCREEN_H = 720, 1280
+screen = pygame.display.set_mode((SCREEN_W, SCREEN_H))
+pygame.display.set_caption("AI Trash")
 
 WHITE       = (255,255,255)
 BLACK       = (0,0,0)
 LIGHT_BLUE  = (173,216,230)
 LIGHT_CORAL = (240,128,128)
 
-font_large  = pygame.font.Font(None, 80)
-font_medium = pygame.font.Font(None, 60)
+font_title  = pygame.font.Font(None, 100)
+font_text   = pygame.font.Font(None, 60)
+font_button = pygame.font.Font(None, 50)
 
-running       = True
-current_item  = "Scanning..."
-confidence    = 0.0
-trash_count   = 0
-recycle_count = 0
-bin_capacity  = 10
-item_volume   = 0.15
+# Button rects (moved up 100px)
+btn_h = 80; btn_w = 220
+btn_y = SCREEN_H - btn_h - 100
+reset_rect = pygame.Rect(60, btn_y, btn_w, btn_h)
+cap_rect   = pygame.Rect(SCREEN_W - btn_w - 60, btn_y, btn_w, btn_h)
 
-def reset_counts():
-    global trash_count, recycle_count, current_item
-    trash_count   = 0
-    recycle_count = 0
-    current_item  = "Scanning..."
-
-def adjust_capacity(change):
-    global bin_capacity
-    bin_capacity = max(1, bin_capacity + change)
-
-def log_classification_details(pred, conf):
-    print(f"Predicted: {pred}, Confidence: {conf:.2%}")
-
-# Initialize Picamera2
-picam2 = Picamera2()
-config = picam2.create_preview_configuration(main={"size": (640,480)})
-picam2.configure(config)
-picam2.start()
-
-# Classification & motor thread
-def classify_and_act():
-    global current_item, trash_count, recycle_count, confidence
+# ---------------------------------------------------------------------
+# 6) Main UI loop
+# ---------------------------------------------------------------------
+try:
     while running:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                x,y = event.pos
+                if reset_rect.collidepoint(x,y):
+                    trash_weight   = recycle_weight = 0.0
+                    current_item   = "Waiting for Object"
+                elif cap_rect.collidepoint(x,y):
+                    bin_capacity += -0.5 if x < cap_rect.centerx else 0.5
+                    bin_capacity = max(1.0, bin_capacity)
+
+        screen.fill(WHITE)
+        # Title
+        title = font_title.render("AI Trash", True, BLACK)
+        screen.blit(title, ((SCREEN_W - title.get_width())//2, 20))
+        # Current
+        cur = font_text.render(f"Current: {current_item}", True, BLACK)
+        screen.blit(cur, ((SCREEN_W - cur.get_width())//2, 140))
+        # Percentages
+        pct_rec = min(recycle_weight/bin_capacity, 1.0)
+        pct_tr  = min(trash_weight  /bin_capacity, 1.0)
+        rec = font_text.render(f"Recyclable: {pct_rec:.1%}", True, LIGHT_BLUE)
+        tr  = font_text.render(f"Trash: {pct_tr:.1%}",       True, LIGHT_CORAL)
+        screen.blit(rec, ((SCREEN_W - rec.get_width())//2, 220))
+        screen.blit(tr,  ((SCREEN_W - tr.get_width())//2, 300))
+        # Camera feed
         frame = picam2.capture_array()
-        pred, conf = classify_frame(frame)
-        log_classification_details(pred, conf)
-        if conf < 0.6:
-            current_item = "Unrecognized"
-            confidence   = 0.0
-            time.sleep(5)
-            continue
-        current_item = pred
-        confidence   = conf
-        if pred == "Recyclable":
-            recycle_count += 1
-            rotate_left();  time.sleep(3.5); stop_motor()
-            time.sleep(1)
-            rotate_right(); time.sleep(3.5); stop_motor()
-        else:
-            trash_count += 1
-            rotate_right(); time.sleep(3.5); stop_motor()
-            time.sleep(1)
-            rotate_left();  time.sleep(3.5); stop_motor()
-        time.sleep(5)
+        if frame.ndim == 2: frame = np.stack((frame,)*3, axis=-1)
+        elif frame.shape[2] == 4: frame = frame[:,:,:3]
+        h,w = frame.shape[:2]
+        surf = pygame.image.frombuffer(frame.tobytes(), (w,h), 'RGB')
+        fw = SCREEN_W - 120
+        fh = int(fw*h/w)
+        feed = pygame.transform.scale(surf, (fw, fh))
+        screen.blit(feed, ((SCREEN_W-fw)//2, 380))
+        # Reset button
+        pygame.draw.rect(screen, LIGHT_BLUE, reset_rect)
+        rs = font_button.render("Reset", True, BLACK)
+        screen.blit(rs, (reset_rect.x + (btn_w-rs.get_width())//2,
+                         reset_rect.y + (btn_h-rs.get_height())//2))
+        # Capacity slider
+        pygame.draw.rect(screen, LIGHT_BLUE, cap_rect)
+        ct = font_button.render(f"< {bin_capacity:.1f} gal >", True, BLACK)
+        screen.blit(ct, (cap_rect.x + (btn_w-ct.get_width())//2,
+                         cap_rect.y + (btn_h-ct.get_height())//2))
+        pygame.display.flip()
 
-threading.Thread(target=classify_and_act, daemon=True).start()
-
-# Main UI loop (your existing drawing & event handling)
-while running:
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            running = False
-        # handle reset/capacity buttons as before…
-
-    # draw camera feed, counts, warnings, etc. exactly as in your original code
-    pygame.display.flip()
-
-# Cleanup
-picam2.stop()
-pwm.stop()
-GPIO.cleanup()
-pygame.quit()
+finally:
+    picam2.stop()
+    pwm.stop()
+    GPIO.cleanup()
+    pygame.quit()
