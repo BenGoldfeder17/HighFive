@@ -1,82 +1,117 @@
 import os
+import numpy as np
 import tensorflow as tf
 from tensorflow.keras import Input, Sequential
 from tensorflow.keras.layers import Conv2D, MaxPooling2D, Activation, Flatten, Dense, Dropout
-from tensorflow.keras.preprocessing import image_dataset_from_directory
-from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
-import matplotlib.pyplot as plt
 
 # ------------------------------------------------------
 # PARAMETERS & DIRECTORY SETUP
 # ------------------------------------------------------
-# On macOS/Linux, drop the "C:" and use a POSIX path
-dataset_dir      = "/Users/Blake/Documents/GEEN1400/dataset-original"
-img_height       = 150
-img_width        = 150
-batch_size       = 16
-epochs           = 30
-learning_rate    = 1e-4
-validation_split = 0.3  # 30% reserved for val+test
+dataset_dir    = r"F:\dataset-original"
+img_height     = 150
+img_width      = 150
+batch_size     = 16
+epochs         = 30
+learning_rate  = 1e-4
+
+# ------------------------------------------------------
+# GUARD: ensure base folder exists
+# ------------------------------------------------------
+if not os.path.isdir(dataset_dir):
+    raise FileNotFoundError(
+        f"Dataset directory not found:\n  {dataset_dir}\n"
+        "Please verify the path (use raw-string r\"...\" or double backslashes)."
+    )
+
+# ------------------------------------------------------
+# DISCOVER CLASSES DYNAMICALLY
+# ------------------------------------------------------
+classes = sorted(
+    d for d in os.listdir(dataset_dir)
+    if os.path.isdir(os.path.join(dataset_dir, d))
+)
+if not classes:
+    raise RuntimeError(f"No class sub‑folders found under '{dataset_dir}'")
+print(f"Discovered classes: {classes}")
+
+class_to_label = {cls: idx for idx, cls in enumerate(classes)}
+
+# ------------------------------------------------------
+# COLLECT IMAGE PATHS & LABELS
+# ------------------------------------------------------
+all_paths, all_labels = [], []
+for cls in classes:
+    folder = os.path.join(dataset_dir, cls)
+    for fname in os.listdir(folder):
+        ext = os.path.splitext(fname)[1].lower()
+        if ext not in {'.jpg', '.jpeg', '.png'}:
+            continue
+        all_paths.append(os.path.join(folder, fname))
+        all_labels.append(class_to_label[cls])
+
+if not all_paths:
+    raise RuntimeError(f"No images found in sub‑folders of '{dataset_dir}'")
+print(f"Found {len(all_paths)} images across {classes}")
+
+# ------------------------------------------------------
+# TRAIN/VAL/TEST SPLIT (70/15/15)
+# ------------------------------------------------------
+data = list(zip(all_paths, all_labels))
+np.random.shuffle(data)
+paths, labels = zip(*data)
+
+n       = len(paths)
+n_train = int(0.7 * n)
+n_val   = int(0.15 * n)
+
+train_paths  = paths[:n_train]
+train_labels = labels[:n_train]
+val_paths    = paths[n_train:n_train + n_val]
+val_labels   = labels[n_train:n_train + n_val]
+test_paths   = paths[n_train + n_val:]
+test_labels  = labels[n_train + n_val:]
+
+print(f"Split → Train:{len(train_paths)}, Val:{len(val_paths)}, Test:{len(test_paths)}")
 
 # ------------------------------------------------------
 # DATASET CREATION
 # ------------------------------------------------------
-# 1) Training (70%)
-train_ds = image_dataset_from_directory(
-    dataset_dir,
-    labels="inferred",
-    label_mode="int",
-    validation_split=validation_split,
-    subset="training",
-    seed=42,
-    image_size=(img_height, img_width),
-    batch_size=batch_size
-)
+def load_and_preprocess(path, label):
+    # Read file bytes
+    img_bytes = tf.io.read_file(path)
+    # Decode based on file content
+    img = tf.image.decode_image(img_bytes, channels=3, expand_animations=False)
+    # Resize & normalize
+    img = tf.image.resize(img, [img_height, img_width])
+    img = img / 255.0
+    return img, label
 
-# 2) Validation+Test (30%), to be halved
-val_test_ds = image_dataset_from_directory(
-    dataset_dir,
-    labels="inferred",
-    label_mode="int",
-    validation_split=validation_split,
-    subset="validation",
-    seed=42,
-    image_size=(img_height, img_width),
-    batch_size=batch_size
-)
+def make_dataset(paths, labels, shuffle=True):
+    ds = tf.data.Dataset.from_tensor_slices((list(paths), list(labels)))
+    ds = ds.map(load_and_preprocess, num_parallel_calls=tf.data.AUTOTUNE)
+    # Skip any elements that caused decode errors
+    ds = ds.apply(tf.data.experimental.ignore_errors())
+    if shuffle:
+        ds = ds.shuffle(buffer_size=len(paths))
+    ds = ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
+    return ds
 
-# 3) Capture class names & count before wrapping in prefetch
-class_names = train_ds.class_names
-num_classes = len(class_names)
-print("Detected classes:", class_names)
-
-# 4) Split into 15% val / 15% test
-val_batches = tf.data.experimental.cardinality(val_test_ds) // 2
-val_ds      = val_test_ds.take(val_batches)
-test_ds     = val_test_ds.skip(val_batches)
-
-# 5) Prefetch for performance
-AUTOTUNE = tf.data.AUTOTUNE
-train_ds = train_ds.prefetch(AUTOTUNE)
-val_ds   = val_ds.prefetch(AUTOTUNE)
-test_ds  = test_ds.prefetch(AUTOTUNE)
-
-print(f"Train batches: {tf.data.experimental.cardinality(train_ds)}")
-print(f"Val   batches: {tf.data.experimental.cardinality(val_ds)}")
-print(f"Test  batches: {tf.data.experimental.cardinality(test_ds)}")
+train_ds = make_dataset(train_paths, train_labels, shuffle=True)
+val_ds   = make_dataset(val_paths,   val_labels,   shuffle=False)
+test_ds  = make_dataset(test_paths,  test_labels,  shuffle=False)
 
 # ------------------------------------------------------
-# MODEL DEFINITION
+# MODEL DEFINITION: 3‑CHANNEL INPUT, N‑WAY OUTPUT
 # ------------------------------------------------------
 model = Sequential([
     Input(shape=(img_height, img_width, 3)),
-    Conv2D(32, 3, activation='relu'), MaxPooling2D(),
-    Conv2D(64, 3, activation='relu'), MaxPooling2D(),
-    Conv2D(128,3, activation='relu'), MaxPooling2D(),
+    Conv2D(32, (3,3)), Activation('relu'), MaxPooling2D(),
+    Conv2D(64, (3,3)), Activation('relu'), MaxPooling2D(),
+    Conv2D(128,(3,3)),Activation('relu'), MaxPooling2D(),
     Flatten(),
     Dense(256, activation='relu'),
     Dropout(0.5),
-    Dense(num_classes, activation='softmax')
+    Dense(len(classes), activation='softmax')
 ])
 
 model.compile(
@@ -84,16 +119,7 @@ model.compile(
     optimizer=tf.keras.optimizers.Adam(learning_rate),
     metrics=['accuracy']
 )
-
 model.summary()
-
-# ------------------------------------------------------
-# CALLBACKS: Early Stopping & Checkpointing
-# ------------------------------------------------------
-callbacks = [
-    EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True),
-    ModelCheckpoint('best_trash_recycling_model.h5', save_best_only=True)
-]
 
 # ------------------------------------------------------
 # TRAINING
@@ -101,33 +127,14 @@ callbacks = [
 history = model.fit(
     train_ds,
     epochs=epochs,
-    validation_data=val_ds,
-    callbacks=callbacks
+    validation_data=val_ds
 )
 
 # ------------------------------------------------------
-# EVALUATE
+# EVALUATE & SAVE (Keras native .keras format)
 # ------------------------------------------------------
 test_loss, test_acc = model.evaluate(test_ds)
 print(f"\nTest Accuracy: {test_acc:.4f}")
 
-# ------------------------------------------------------
-# SAVE FINAL MODEL
-# ------------------------------------------------------
-model.save("final_trash_recycling_model.h5")
-print("Saved final model to final_trash_recycling_model.h5")
-
-# ------------------------------------------------------
-# OPTIONAL: Plot Learning Curves
-# ------------------------------------------------------
-plt.figure()
-plt.plot(history.history['accuracy'], label='train acc')
-plt.plot(history.history['val_accuracy'], label='val acc')
-plt.xlabel('Epoch'); plt.ylabel('Accuracy'); plt.legend()
-plt.show()
-
-plt.figure()
-plt.plot(history.history['loss'], label='train loss')
-plt.plot(history.history['val_loss'], label='val loss')
-plt.xlabel('Epoch'); plt.ylabel('Loss'); plt.legend()
-plt.show()
+model.save("trash_recycling_model.keras")
+print("Saved model to trash_recycling_model.keras")
