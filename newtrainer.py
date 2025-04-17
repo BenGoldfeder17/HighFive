@@ -1,100 +1,82 @@
 import os
-import numpy as np
 import tensorflow as tf
-from tensorflow.keras import Input
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import (
-    Conv2D, MaxPooling2D,
-    Activation, Flatten,
-    Dense, Dropout
-)
+from tensorflow.keras import Input, Sequential
+from tensorflow.keras.layers import Conv2D, MaxPooling2D, Activation, Flatten, Dense, Dropout
+from tensorflow.keras.preprocessing import image_dataset_from_directory
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
+import matplotlib.pyplot as plt
 
 # ------------------------------------------------------
 # PARAMETERS & DIRECTORY SETUP
 # ------------------------------------------------------
-dataset_dir = r"\Users\Blake\Documents\GEEN1400\dataset-original"
-classes     = ['trash', 'recycling']
-class_to_label = {cls:i for i,cls in enumerate(classes)}
-
-img_height, img_width = 150, 150
-batch_size = 16
-epochs     = 30
-learning_rate = 1e-4
-
-# ------------------------------------------------------
-# COLLECT IMAGE PATHS & LABELS
-# ------------------------------------------------------
-all_paths  = []
-all_labels = []
-for cls in classes:
-    folder = os.path.join(dataset_dir, cls)
-    if not os.path.isdir(folder):
-        print(f"Warning: Missing folder {folder}")
-        continue
-    for fname in os.listdir(folder):
-        ext = os.path.splitext(fname)[1].lower()
-        if ext not in {'.jpg','.jpeg','.png'}:
-            continue
-        all_paths.append(os.path.join(folder, fname))
-        all_labels.append(class_to_label[cls])
-
-print(f"Found {len(all_paths)} total images across {classes}")
-
-# ------------------------------------------------------
-# TRAIN/VAL/TEST SPLIT (70/15/15)
-# ------------------------------------------------------
-data = list(zip(all_paths, all_labels))
-np.random.shuffle(data)
-paths, labels = zip(*data)
-
-n = len(paths)
-n_train = int(0.7*n)
-n_val   = int(0.15*n)
-
-train_paths  = paths[:n_train]
-train_labels = labels[:n_train]
-val_paths    = paths[n_train:n_train+n_val]
-val_labels   = labels[n_train:n_train+n_val]
-test_paths   = paths[n_train+n_val:]
-test_labels  = labels[n_train+n_val:]
-
-print(f"Train: {len(train_paths)}, Val: {len(val_paths)}, Test: {len(test_paths)}")
+# On macOS/Linux, drop the "C:" and use a POSIX path
+dataset_dir      = "/Users/Blake/Documents/GEEN1400/dataset-original"
+img_height       = 150
+img_width        = 150
+batch_size       = 16
+epochs           = 30
+learning_rate    = 1e-4
+validation_split = 0.3  # 30% reserved for val+test
 
 # ------------------------------------------------------
 # DATASET CREATION
 # ------------------------------------------------------
-def load_and_preprocess(path, label):
-    img = tf.io.read_file(path)
-    img = tf.image.decode_jpeg(img, channels=3)
-    img = tf.image.resize(img, [img_height, img_width])
-    img = img / 255.0
-    return img, label
+# 1) Training (70%)
+train_ds = image_dataset_from_directory(
+    dataset_dir,
+    labels="inferred",
+    label_mode="int",
+    validation_split=validation_split,
+    subset="training",
+    seed=42,
+    image_size=(img_height, img_width),
+    batch_size=batch_size
+)
 
-def make_dataset(paths, labels, shuffle=True):
-    ds = tf.data.Dataset.from_tensor_slices((list(paths), list(labels)))
-    ds = ds.map(load_and_preprocess,
-                num_parallel_calls=tf.data.experimental.AUTOTUNE)
-    if shuffle:
-        ds = ds.shuffle(buffer_size=len(paths))
-    ds = ds.batch(batch_size).prefetch(tf.data.experimental.AUTOTUNE)
-    return ds
+# 2) Validation+Test (30%), to be halved
+val_test_ds = image_dataset_from_directory(
+    dataset_dir,
+    labels="inferred",
+    label_mode="int",
+    validation_split=validation_split,
+    subset="validation",
+    seed=42,
+    image_size=(img_height, img_width),
+    batch_size=batch_size
+)
 
-train_ds = make_dataset(train_paths, train_labels, shuffle=True)
-val_ds   = make_dataset(val_paths,   val_labels,   shuffle=False)
-test_ds  = make_dataset(test_paths,  test_labels,  shuffle=False)
+# 3) Capture class names & count before wrapping in prefetch
+class_names = train_ds.class_names
+num_classes = len(class_names)
+print("Detected classes:", class_names)
+
+# 4) Split into 15% val / 15% test
+val_batches = tf.data.experimental.cardinality(val_test_ds) // 2
+val_ds      = val_test_ds.take(val_batches)
+test_ds     = val_test_ds.skip(val_batches)
+
+# 5) Prefetch for performance
+AUTOTUNE = tf.data.AUTOTUNE
+train_ds = train_ds.prefetch(AUTOTUNE)
+val_ds   = val_ds.prefetch(AUTOTUNE)
+test_ds  = test_ds.prefetch(AUTOTUNE)
+
+print(f"Train batches: {tf.data.experimental.cardinality(train_ds)}")
+print(f"Val   batches: {tf.data.experimental.cardinality(val_ds)}")
+print(f"Test  batches: {tf.data.experimental.cardinality(test_ds)}")
 
 # ------------------------------------------------------
-# MODEL DEFINITION: 3‑CHANNEL INPUT, 2‑WAY OUTPUT
+# MODEL DEFINITION
 # ------------------------------------------------------
 model = Sequential([
     Input(shape=(img_height, img_width, 3)),
-    Conv2D(32, (3,3)), Activation('relu'), MaxPooling2D(),
-    Conv2D(64, (3,3)), Activation('relu'), MaxPooling2D(),
-    Conv2D(128,(3,3)), Activation('relu'), MaxPooling2D(),
+    Conv2D(32, 3, activation='relu'), MaxPooling2D(),
+    Conv2D(64, 3, activation='relu'), MaxPooling2D(),
+    Conv2D(128,3, activation='relu'), MaxPooling2D(),
     Flatten(),
     Dense(256, activation='relu'),
     Dropout(0.5),
-    Dense(len(classes), activation='softmax')
+    Dense(num_classes, activation='softmax')
 ])
 
 model.compile(
@@ -106,19 +88,46 @@ model.compile(
 model.summary()
 
 # ------------------------------------------------------
+# CALLBACKS: Early Stopping & Checkpointing
+# ------------------------------------------------------
+callbacks = [
+    EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True),
+    ModelCheckpoint('best_trash_recycling_model.h5', save_best_only=True)
+]
+
+# ------------------------------------------------------
 # TRAINING
 # ------------------------------------------------------
 history = model.fit(
     train_ds,
     epochs=epochs,
-    validation_data=val_ds
+    validation_data=val_ds,
+    callbacks=callbacks
 )
 
 # ------------------------------------------------------
-# EVALUATE & SAVE
+# EVALUATE
 # ------------------------------------------------------
 test_loss, test_acc = model.evaluate(test_ds)
 print(f"\nTest Accuracy: {test_acc:.4f}")
 
-model.save("trash_recycling_model.h5")
-print("Saved model to trash_recycling_model.h5")
+# ------------------------------------------------------
+# SAVE FINAL MODEL
+# ------------------------------------------------------
+model.save("final_trash_recycling_model.h5")
+print("Saved final model to final_trash_recycling_model.h5")
+
+# ------------------------------------------------------
+# OPTIONAL: Plot Learning Curves
+# ------------------------------------------------------
+plt.figure()
+plt.plot(history.history['accuracy'], label='train acc')
+plt.plot(history.history['val_accuracy'], label='val acc')
+plt.xlabel('Epoch'); plt.ylabel('Accuracy'); plt.legend()
+plt.show()
+
+plt.figure()
+plt.plot(history.history['loss'], label='train loss')
+plt.plot(history.history['val_loss'], label='val loss')
+plt.xlabel('Epoch'); plt.ylabel('Loss'); plt.legend()
+plt.show()
