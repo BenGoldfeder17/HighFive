@@ -12,7 +12,7 @@ from tensorflow.keras.layers import (
 # ------------------------------------------------------
 # PARAMETERS & DIRECTORY SETUP
 # ------------------------------------------------------
-dataset_dir = r"C:\Users\benny\TrashRecyclingDataset"
+dataset_dir = r"\Users\Blake\Documents\GEEN1400\dataset-original"
 classes     = ['trash', 'recycling']
 class_to_label = {cls:i for i,cls in enumerate(classes)}
 
