@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# main.py — fully updated to load the Flatten→Linear .pth from from_torch.py
-# (preserves all original GPIO, camera, pygame UI, and motor control code)
+# main.py — updated to load the Keras .keras model from trash_recycling_model.keras
+# (preserves all original GPIO, Picamera2, pygame UI, and motor control code)
 
 import os
 import subprocess
@@ -12,83 +12,65 @@ if os.geteuid() != 0:
     sys.exit(1)
 
 # Ensure required packages are installed
-required_packages = ["RPi.GPIO", "torch", "torchvision", "pygame", "numpy", "picamera2"]
-for package in required_packages:
+required_packages = ["RPi.GPIO", "tensorflow", "pygame", "numpy", "picamera2"]
+for pkg in required_packages:
+    name = pkg.split('-')[0]
     try:
-        __import__(package.split('-')[0])
+        __import__(name)
     except ImportError:
-        print(f"{package} not found. Installing…")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+        print(f"{pkg} not found. Installing…")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
 
 # -------------------------------
-# 1) PyTorch + model setup
+# 1) Keras + model setup
 # -------------------------------
-import torch
-import torchvision.transforms as transforms
-from torch import nn
+import tensorflow as tf
 
-# Class names (must match the labels used when generating garbage_classifier.pth)
+# Class names (must match the folders used when training)
 class_names = ["Recyclable", "Trash"]
 
-# Device
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# Load the Keras model (native .keras format)
+MODEL_PATH = "trash_recycling_model.keras"
+model = tf.keras.models.load_model(MODEL_PATH)
+print(f"[INFO] Loaded Keras model '{MODEL_PATH}' with classes {class_names}")
 
-# Build the same Flatten→Linear model you trained in from_torch.py
-IMG_H, IMG_W = 224, 224
-num_classes = len(class_names)
-model = nn.Sequential(
-    nn.Flatten(),
-    nn.Linear(3 * IMG_H * IMG_W, num_classes)
-).to(device)
+# Image size used during training
+IMG_H, IMG_W = 150, 150
 
-# Load your state_dict (from from_torch.py)
-MODEL_PATH = "garbage_classifier.pth"
-checkpoint = torch.load(MODEL_PATH, map_location=device)
-model.load_state_dict(checkpoint)
-model.eval()
-print(f"[INFO] Loaded model '{MODEL_PATH}' with classes {class_names}")
-
-# Image preprocessing (you may keep your ColorJitter or remove it; here's original + match training)
-preprocess = transforms.Compose([
-    transforms.ToPILImage(mode="RGB"),
-    transforms.Resize((IMG_H, IMG_W)),
-    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                         std =[0.229, 0.224, 0.225]),
-])
-
-# Safe loader to skip broken images
-from PIL import Image, UnidentifiedImageError
-def safe_pil_loader(path):
-    try:
-        with open(path, "rb") as f:
-            img = Image.open(f)
-            return img.convert("RGB")
-    except Exception as e:
-        print(f"[WARN] Could not load {path}: {e}")
-        return Image.new("RGB", (IMG_H, IMG_W), "black")
-
-# Helper to preprocess frames for model
+# -------------------------------
+# 2) Preprocessing helper
+# -------------------------------
 import numpy as np
-def preprocess_frame(frame: np.ndarray) -> torch.Tensor:
+
+def preprocess_frame(frame: np.ndarray) -> tf.Tensor:
+    """
+    - frame: HxWxC numpy array from Picamera2
+    - returns: 1xIMG_HxIMG_Wx3 tensor normalized [0,1]
+    """
+    # Ensure RGB
     if frame.ndim == 2:
         frame = np.stack((frame,)*3, axis=-1)
     elif frame.shape[2] == 4:
         frame = frame[:, :, :3]
-    return preprocess(frame).unsqueeze(0).to(device)
+    # Convert to float32 and normalize
+    img = tf.convert_to_tensor(frame, dtype=tf.float32) / 255.0
+    # Resize
+    img = tf.image.resize(img, [IMG_H, IMG_W])
+    # Add batch dim
+    return tf.expand_dims(img, axis=0)
 
-# Helper to classify a single image/frame
-def classify_tensor(inp: torch.Tensor):
-    with torch.no_grad():
-        out = model(inp)
-        probs = torch.nn.functional.softmax(out[0], dim=0)
-        conf, idx = torch.max(probs, 0)
-        return class_names[idx.item()], conf.item()
+def classify_frame(frame: np.ndarray):
+    """
+    Returns (predicted_class:str, confidence:float)
+    """
+    inp = preprocess_frame(frame)
+    probs = model(inp, training=False)[0].numpy()
+    idx  = np.argmax(probs)
+    return class_names[idx], float(probs[idx])
 
 # ---------------------------------------------------------------------
-# 2) All existing GPIO, Picamera2, motor, and pygame UI code follows
-#    unchanged except it now calls classify_tensor().
+# 3) All existing GPIO, Picamera2, motor, and pygame UI code follows
+#    unchanged except it now calls classify_frame().
 # ---------------------------------------------------------------------
 
 import RPi.GPIO as GPIO
@@ -153,8 +135,8 @@ def adjust_capacity(change):
     global bin_capacity
     bin_capacity = max(1, bin_capacity + change)
 
-def log_classification_details(probs, pred, conf):
-    print(f"Probs: {probs}, Pred: {pred}, Conf: {conf:.2f}")
+def log_classification_details(pred, conf):
+    print(f"Predicted: {pred}, Confidence: {conf:.2%}")
 
 # Initialize Picamera2
 picam2 = Picamera2()
@@ -167,9 +149,8 @@ def classify_and_act():
     global current_item, trash_count, recycle_count, confidence
     while running:
         frame = picam2.capture_array()
-        inp   = preprocess_frame(frame)
-        pred, conf = classify_tensor(inp)
-        log_classification_details(None, pred, conf)
+        pred, conf = classify_frame(frame)
+        log_classification_details(pred, conf)
         if conf < 0.6:
             current_item = "Unrecognized"
             confidence = 0.0
