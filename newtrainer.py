@@ -7,7 +7,7 @@ from tensorflow.keras.layers import Conv2D, MaxPooling2D, Activation, Flatten, D
 # ------------------------------------------------------
 # PARAMETERS & DIRECTORY SETUP
 # ------------------------------------------------------
-dataset_dir    = r"F:\dataset-original"
+dataset_dir    = r"D:\Neural Network Stuff\GEEN1400\dataset-original"
 img_height     = 150
 img_width      = 150
 batch_size     = 16
