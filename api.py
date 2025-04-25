@@ -1,87 +1,66 @@
-#!/home/highfive/Downloads/highfive/Downloads/bin/python3.11
-import os
+#!/usr/bin/env python3
 import sys
 import time
-import threading
 import base64
 import io
+import threading
 
 import numpy as np
-import RPi.GPIO as GPIO
-import pygame
-from picamera2 import Picamera2
+import cv2
 from PIL import Image
 import openai
 
-# ─── 0) OpenAI QuickStart setup ──────────────────────────────────────────
-OPENAI_KEY = os.getenv("OPENAI_API_KEY")
-if not OPENAI_KEY:
-    print("[ERROR] Please set OPENAI_API_KEY in your environment.")
+# ─── 0) Prompt for Project-Scoped API Key ────────────────────────────────
+OPENAI_KEY = input("Enter your OpenAI Project API key (must start with sk-proj-): ").strip()
+if not OPENAI_KEY.startswith("sk-proj-"):
+    print("[ERROR] This script only accepts project-scoped API keys (sk-proj-...).")
     sys.exit(1)
+
+OPENAI_PROJECT = input("Enter your OpenAI project ID: ").strip()
+
+# Set API key and project ID as custom header
 openai.api_key = OPENAI_KEY
+openai._custom_headers = {
+    "OpenAI-Project": OPENAI_PROJECT
+}
 
-# ─── 1) Categories & bin mapping ─────────────────────────────────────────
-CLASS_NAMES     = ["biodegradable", "cardboard", "glass", "metal", "paper", "plastic", "trash"]
-RECYCLE_SET     = {"cardboard", "glass", "metal", "paper"}
-TRASH_SET       = {"biodegradable", "plastic", "trash"}
+# ─── 1) Class Info ───────────────────────────────────────────────────────
+CLASS_NAMES    = ["biodegradable", "cardboard", "glass", "metal", "paper", "plastic", "trash"]
+RECYCLE_SET    = {"cardboard", "glass", "metal", "paper"}
+TRASH_SET      = {"biodegradable", "plastic", "trash"}
 
-# ─── 2) Constants ────────────────────────────────────────────────────────
-ITEM_WEIGHT  = 0.125   # lbs per detected item
-DIFF_THRESH  = 5       # pixel‐difference threshold
-PAUSE_BEFORE = 2       # seconds to wait once motion detected
-BIN_CAP      = 10.0    # default capacity (gallons)
+ITEM_WEIGHT    = 0.125  # lbs per item
+DIFF_THRESH    = 5      # motion threshold
+PAUSE_BEFORE   = 2      # seconds before classifying
+BIN_CAP        = 10.0   # gallons
 
-# ─── 3) GPIO & motor setup ───────────────────────────────────────────────
-IN1, IN2, ENA = 23, 24, 5
-GPIO.setmode(GPIO.BCM)
-GPIO.setup(IN1, GPIO.OUT)
-GPIO.setup(IN2, GPIO.OUT)
-GPIO.setup(ENA, GPIO.OUT)
-pwm = GPIO.PWM(ENA, 1000)
-pwm.start(0)
+# ─── 2) Webcam Setup ─────────────────────────────────────────────────────
+cap = cv2.VideoCapture(0)
+if not cap.isOpened():
+    print("[ERROR] Could not access webcam.")
+    sys.exit(1)
 
-def rotate_left(speed=100):
-    GPIO.output(IN1, GPIO.HIGH)
-    GPIO.output(IN2, GPIO.LOW)
-    pwm.ChangeDutyCycle(speed)
-
-def rotate_right(speed=100):
-    GPIO.output(IN1, GPIO.LOW)
-    GPIO.output(IN2, GPIO.HIGH)
-    pwm.ChangeDutyCycle(speed)
-
-def stop_motor():
-    pwm.ChangeDutyCycle(0)
-    GPIO.output(IN1, GPIO.LOW)
-    GPIO.output(IN2, GPIO.LOW)
-
-# ─── 4) Camera init & background capture ─────────────────────────────────
-os.environ["BCM2835_PERI_BASE"] = "0xFE000000"
-os.environ["BCM2708_PERI_BASE"] = "0xFE000000"
-
-picam2 = Picamera2()
-cfg    = picam2.create_preview_configuration(main={"size": (640,480)})
-picam2.configure(cfg)
-picam2.start()
 time.sleep(2)
-background = picam2.capture_array().astype(np.int16)
+ret, frame = cap.read()
+if not ret:
+    print("[ERROR] Failed to read from webcam.")
+    sys.exit(1)
+background = frame.astype(np.int16)
 
-# ─── 5) OpenAI‐based classify function (new interface) ──────────────────
+# ─── 3) Classify with OpenAI ─────────────────────────────────────────────
 def classify_with_openai(frame: np.ndarray) -> (str, float):
-    # Encode frame as PNG→base64
-    pil = Image.fromarray(frame)
+    pil_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
     buf = io.BytesIO()
-    pil.save(buf, format="PNG")
-    b64 = base64.b64encode(buf.getvalue()).decode()
+    pil_img.save(buf, format="PNG")
+    b64_img = base64.b64encode(buf.getvalue()).decode()
 
-    # **Use the new v1 API** via the `openai.chat.completions.create` endpoint
     resp = openai.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": "You are an expert recycling classifier."},
-            {"role": "user",   "content":
+            {"role": "user", "content":
                 "Classify this image into one of: biodegradable, cardboard, glass, metal, paper, plastic, trash.\n"
-                "Here is the image (base64 PNG):\n" + b64
+                "Here is the image (base64 PNG):\n" + b64_img
             }
         ],
         temperature=0.0
@@ -89,121 +68,58 @@ def classify_with_openai(frame: np.ndarray) -> (str, float):
     label = resp.choices[0].message.content.strip().lower()
     return label, 1.0
 
-# ─── 6) Shared state & background thread ─────────────────────────────────
-running         = True
-display_label   = "Waiting for Object"
-confidence      = 0.0
-trash_weight    = 0.0
-recycle_weight  = 0.0
-bin_capacity    = BIN_CAP
+# ─── 4) Classify Loop ────────────────────────────────────────────────────
+running = True
+trash_weight = 0.0
+recycle_weight = 0.0
+bin_capacity = BIN_CAP
 
-def classify_and_act():
-    global display_label, confidence, trash_weight, recycle_weight
+def classify_loop():
+    global trash_weight, recycle_weight
     while running:
-        frame    = picam2.capture_array()
-        diff_val = np.mean(np.abs(frame.astype(np.int16) - background))
-        if diff_val < DIFF_THRESH:
-            display_label = "Waiting for Object"
-            confidence    = 0.0
-        else:
-            time.sleep(PAUSE_BEFORE)
-            raw_label, conf = classify_with_openai(frame)
-            confidence       = conf
+        ret, frame = cap.read()
+        if not ret:
+            print("[ERROR] Failed to grab frame.")
+            continue
 
-            if raw_label in RECYCLE_SET:
-                display_label   = f"Recycle ({raw_label.capitalize()})"
+        diff = np.mean(np.abs(frame.astype(np.int16) - background))
+        if diff < DIFF_THRESH:
+            print("[INFO] No object detected.")
+        else:
+            print("[INFO] Object detected. Classifying...")
+            time.sleep(PAUSE_BEFORE)
+
+            try:
+                label, _ = classify_with_openai(frame)
+            except Exception as e:
+                print(f"[ERROR] OpenAI request failed: {e}")
+                continue
+
+            if label in RECYCLE_SET:
                 recycle_weight += ITEM_WEIGHT
-                rotate_left();  time.sleep(3.5); stop_motor()
-                time.sleep(1)
-                rotate_right(); time.sleep(3.5); stop_motor()
-            elif raw_label in TRASH_SET:
-                display_label = f"Trash ({raw_label.capitalize()})"
-                trash_weight  += ITEM_WEIGHT
-                rotate_right(); time.sleep(3.5); stop_motor()
-                time.sleep(1)
-                rotate_left();  time.sleep(3.5); stop_motor()
+                print(f"[RECYCLE] {label.capitalize()} → Recycle bin")
+            elif label in TRASH_SET:
+                trash_weight += ITEM_WEIGHT
+                print(f"[TRASH] {label.capitalize()} → Trash bin")
             else:
-                display_label = f"Unknown ({raw_label.capitalize()})"
-                stop_motor()
+                print(f"[UNKNOWN] {label.capitalize()} → No action taken")
+
+            r_pct = recycle_weight / bin_capacity
+            t_pct = trash_weight / bin_capacity
+            print(f"  • Recycled: {recycle_weight:.2f} lbs ({r_pct:.0%})")
+            print(f"  • Trash:    {trash_weight:.2f} lbs ({t_pct:.0%})")
 
         time.sleep(5)
 
-threading.Thread(target=classify_and_act, daemon=True).start()
-
-# ─── 7) Pygame UI loop ───────────────────────────────────────────────────
-pygame.init()
-SCREEN_W, SCREEN_H = 720, 1280
-screen = pygame.display.set_mode((SCREEN_W, SCREEN_H))
-pygame.display.set_caption("AI Trash")
-
-WHITE       = (255,255,255)
-BLACK       = (0,0,0)
-LIGHT_BLUE  = (173,216,230)
-LIGHT_CORAL = (240,128,128)
-
-font_title  = pygame.font.Font(None, 100)
-font_text   = pygame.font.Font(None, 60)
-font_button = pygame.font.Font(None, 50)
-
-btn_h, btn_w = 80, 220
-btn_y        = SCREEN_H - btn_h - 100
-reset_rect   = pygame.Rect(60, btn_y, btn_w, btn_h)
-cap_rect     = pygame.Rect(SCREEN_W - btn_w - 60, btn_y, btn_w, btn_h)
-
+# ─── 5) Start Main Loop ──────────────────────────────────────────────────
 try:
-    while running:
-        for ev in pygame.event.get():
-            if ev.type == pygame.QUIT:
-                running = False
-            elif ev.type == pygame.MOUSEBUTTONDOWN:
-                x,y = ev.pos
-                if reset_rect.collidepoint(x,y):
-                    trash_weight   = recycle_weight = 0.0
-                    display_label  = "Waiting for Object"
-                elif cap_rect.collidepoint(x,y):
-                    bin_capacity += -0.5 if x < cap_rect.centerx else 0.5
-                    bin_capacity = max(1.0, bin_capacity)
+    print("🚀 AI Trash Classifier (Project Key Mode) Running... Ctrl+C to stop\n")
+    threading.Thread(target=classify_loop, daemon=True).start()
 
-        screen.fill(WHITE)
-        title = font_title.render("AI Trash", True, BLACK)
-        screen.blit(title, ((SCREEN_W - title.get_width())//2, 20))
+    while True:
+        time.sleep(1)
 
-        cur = font_text.render(display_label, True, BLACK)
-        screen.blit(cur, ((SCREEN_W - cur.get_width())//2, 140))
-
-        pct_rec = min(recycle_weight / bin_capacity, 1.0)
-        pct_tr  = min(trash_weight   / bin_capacity, 1.0)
-        rec = font_text.render(f"Recycling: {pct_rec:.1%}", True, LIGHT_BLUE)
-        tr  = font_text.render(f"Trash:     {pct_tr:.1%}", True, LIGHT_CORAL)
-        screen.blit(rec, ((SCREEN_W - rec.get_width())//2, 220))
-        screen.blit(tr,  ((SCREEN_W - tr.get_width())//2, 300))
-
-        frame = picam2.capture_array()
-        if frame.ndim == 2:
-            frame = np.stack((frame,)*3, axis=-1)
-        elif frame.shape[2] == 4:
-            frame = frame[:,:,:3]
-        h,w  = frame.shape[:2]
-        surf = pygame.image.frombuffer(frame.tobytes(), (w,h), 'RGB')
-        fw   = SCREEN_W - 120
-        fh   = int(fw * h / w)
-        feed = pygame.transform.scale(surf, (fw, fh))
-        screen.blit(feed, ((SCREEN_W - fw)//2, 380))
-
-        pygame.draw.rect(screen, LIGHT_BLUE, reset_rect)
-        rs = font_button.render("Reset", True, BLACK)
-        screen.blit(rs, (reset_rect.x + (btn_w - rs.get_width())//2,
-                         reset_rect.y + (btn_h - rs.get_height())//2))
-
-        pygame.draw.rect(screen, LIGHT_BLUE, cap_rect)
-        ct = font_button.render(f"< {bin_capacity:.1f} gal >", True, BLACK)
-        screen.blit(ct, (cap_rect.x + (btn_w - ct.get_width())//2,
-                         cap_rect.y + (btn_h - ct.get_height())//2))
-
-        pygame.display.flip()
-
-finally:
-    picam2.stop()
-    pwm.stop()
-    GPIO.cleanup()
-    pygame.quit()
+except KeyboardInterrupt:
+    print("\n🛑 Exiting.")
+    running = False
+    cap.release()
