@@ -27,18 +27,18 @@ openai._custom_headers = {
     "OpenAI-Project": OPENAI_PROJECT
 }
 
-# ─── 1) Categories & bin mapping ─────────────────────────────────────────
-CLASS_NAMES     = ["biodegradable", "cardboard", "glass", "metal", "paper", "plastic", "trash"]
-RECYCLE_SET     = {"cardboard", "glass", "metal", "paper"}
-TRASH_SET       = {"biodegradable", "plastic", "trash"}
+# ─── 1) Categories & bin mapping ───────────────────────────────────────────
+CLASS_NAMES    = ["biodegradable", "cardboard", "glass", "metal", "paper", "plastic", "trash"]
+RECYCLE_SET    = {"cardboard", "glass", "metal", "paper","recycling"}
+TRASH_SET      = {"biodegradable", "plastic", "trash"}
 
-# ─── 2) Constants ────────────────────────────────────────────────────────
-ITEM_WEIGHT  = 0.125   # lbs per detected item
-DIFF_THRESH  = 5       # pixel‐difference threshold
-PAUSE_BEFORE = 2       # seconds to wait once motion detected
-BIN_CAP      = 10.0    # default capacity (gallons)
+# ─── 2) Constants ──────────────────────────────────────────────────────────
+ITEM_WEIGHT    = 0.125   # lbs per detected item
+DIFF_THRESH    = 5       # pixel‐difference threshold
+PAUSE_BEFORE   = 2       # seconds to wait once motion detected
+BIN_CAP        = 10.0    # default capacity (gallons)
 
-# ─── 3) GPIO & motor setup ───────────────────────────────────────────────
+# ─── 3) GPIO & motor setup ────────────────────────────────────────────────
 IN1, IN2, ENA = 23, 24, 5
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(IN1, GPIO.OUT)
@@ -62,41 +62,58 @@ def stop_motor():
     GPIO.output(IN1, GPIO.LOW)
     GPIO.output(IN2, GPIO.LOW)
 
-# ─── 4) Camera init & background capture ─────────────────────────────────
+# ─── 4) Camera init & background capture ────────────────────────────────────
 os.environ["BCM2835_PERI_BASE"] = "0xFE000000"
 os.environ["BCM2708_PERI_BASE"] = "0xFE000000"
 
 picam2 = Picamera2()
-cfg    = picam2.create_preview_configuration(main={"size": (640,480)})
+cfg = picam2.create_preview_configuration(main={"size": (640,480)})
 picam2.configure(cfg)
 picam2.start()
 time.sleep(2)
 background = picam2.capture_array().astype(np.int16)
 
-# ─── 5) OpenAI‐based classify function (new interface) ──────────────────
+# ─── 5) OpenAI‐based classify function (resized, JPEG, sanitized + logging) ─
 def classify_with_openai(frame: np.ndarray) -> (str, float):
-    # Encode frame as PNG→base64
-    pil = Image.fromarray(frame)
+    global CLASS_NAMES
+
+    # 1) shrink to 224×224 & convert to RGB
+    pil = Image.fromarray(frame).resize((224,224), Image.LANCZOS)
+    if pil.mode != "RGB":
+        pil = pil.convert("RGB")
+
+    # 2) JPEG-compress
     buf = io.BytesIO()
-    pil.save(buf, format="PNG")
+    pil.save(buf, format="JPEG", quality=20)
     b64 = base64.b64encode(buf.getvalue()).decode()
 
-    # **Use the new v1 API** via the openai.chat.completions.create endpoint
+    # 3) prompt model to reply with exactly one category word
+    prompt = (
+        "Classify the object on the platform image into exactly one of these words:\n"
+        "biodegradable, cardboard, glass, metal, paper, plastic\n"
+        "Reply with exactly one word (no punctuation).\n\n"
+        "Here is the image (base64 JPEG):\n" + b64
+    )
     resp = openai.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-4.1",
         messages=[
             {"role": "system", "content": "You are an expert recycling classifier."},
-            {"role": "user",   "content":
-                "Classify this image into one of: biodegradable, cardboard, glass, metal, paper, plastic, trash.\n"
-                "Here is the image (base64 PNG):\n" + b64
-            }
+            {"role": "user",   "content": prompt}
         ],
-        temperature=0.0
+        max_completion_tokens=3
     )
-    label = resp.choices[0].message.content.strip().lower()
+
+    raw = resp.choices[0].message.content.strip().lower()
+    print(f"[OpenAI] raw response → {raw}")  # log to terminal
+
+    # 4) sanitize: match against CLASS_NAMES
+    label = next((c for c in CLASS_NAMES if raw == c or c in raw), None)
+    if label is None:
+        print(f"[OpenAI] unexpected label “{raw}”, defaulting to “trash”")
+        label = "trash"
     return label, 1.0
 
-# ─── 6) Shared state & background thread ─────────────────────────────────
+# ─── 6) Shared state & background thread ───────────────────────────────────
 running         = True
 display_label   = "Waiting for Object"
 confidence      = 0.0
@@ -120,15 +137,15 @@ def classify_and_act():
             if raw_label in RECYCLE_SET:
                 display_label   = f"Recycle ({raw_label.capitalize()})"
                 recycle_weight += ITEM_WEIGHT
-                rotate_left();  time.sleep(3.5); stop_motor()
+                rotate_left();  time.sleep(4); stop_motor()
                 time.sleep(1)
-                rotate_right(); time.sleep(3.5); stop_motor()
+                rotate_right(); time.sleep(4); stop_motor()
             elif raw_label in TRASH_SET:
                 display_label = f"Trash ({raw_label.capitalize()})"
                 trash_weight  += ITEM_WEIGHT
-                rotate_right(); time.sleep(3.5); stop_motor()
+                rotate_right(); time.sleep(4); stop_motor()
                 time.sleep(1)
-                rotate_left();  time.sleep(3.5); stop_motor()
+                rotate_left();  time.sleep(4); stop_motor()
             else:
                 display_label = f"Unknown ({raw_label.capitalize()})"
                 stop_motor()
@@ -137,7 +154,7 @@ def classify_and_act():
 
 threading.Thread(target=classify_and_act, daemon=True).start()
 
-# ─── 7) Pygame UI loop ───────────────────────────────────────────────────
+# ─── 7) Pygame UI loop ───────────────────────────────────────────────────────
 pygame.init()
 SCREEN_W, SCREEN_H = 720, 1280
 screen = pygame.display.set_mode((SCREEN_W, SCREEN_H))
